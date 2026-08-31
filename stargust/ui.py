@@ -2,17 +2,17 @@
 """StarGust（星息）tkinter 图形界面
 
 布局架构：侧边导航 + 整页切换（tkraise）
-  - 左侧固定导航栏：6 大模块（残留检测 / 端口占用 / 网络连通 /
-    网络诊断 / 实时监控 / 代理管理）
-  - 右侧内容区：6 个页面 Frame 叠放，切换时 tkraise() 提升
+  - 左侧固定导航栏：8 大模块（本机概览 / 残留检测 / 端口占用 /
+    网络连通 / 网络诊断 / 代理管理 / 反馈 / 设置）
+  - 右侧内容区：8 个页面 Frame 叠放，切换时 tkraise() 提升
   - 全局区：进度条（内容区顶部）、日志区（可折叠）、状态栏（底部）
 
 交互原则：
   - 通知类信息一律进日志 + 状态栏，不弹窗打扰（静默）
-  - 仅保留必要的安全确认弹窗（清理 / 还原 / 清缓存 / 强制恢复）
+  - 仅保留必要的安全确认弹窗（清理 / 还原 / 清缓存 / 强制恢复 / 结束进程）
   - 长任务（全扫 / 清理 / 还原 / 强制恢复）运行时显示进度条
   - 任务结束在状态栏给出成功 / 失败着色提示
-  - 切换离开「实时监控」自动暂停其后台刷新循环，切回自动恢复
+  - 切换离开「本机概览」自动暂停其后台刷新循环，切回自动恢复
 """
 import os
 import queue
@@ -30,7 +30,7 @@ except ImportError:
 
 from . import constants as C
 from . import (backup, cleaner, detector, monitor, netcheck,
-               netdiag, porttest, proxy, scanner)
+               netdiag, porttest, proxy, scanner, sysinfo)
 
 
 def _resource_path(rel):
@@ -41,15 +41,26 @@ def _resource_path(rel):
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), rel)
 
 
+def _get_os_version():
+    """返回简洁的 Windows 版本描述（零第三方依赖）"""
+    try:
+        import platform
+        return platform.platform(terse=True)
+    except Exception:
+        return "Windows"
+
+
 class StarGustApp:
     # 侧边导航结构：key -> 显示名
     NAV_ITEMS = (
+        ("overview", "本机概览"),
         ("detect", "残留检测"),
         ("port", "端口占用"),
         ("net", "网络连通"),
         ("diag", "网络诊断"),
-        ("mon", "实时监控"),
         ("proxy", "代理管理"),
+        ("feedback", "反馈"),
+        ("settings", "设置"),
     )
 
     def __init__(self, root):
@@ -58,7 +69,7 @@ class StarGustApp:
         self.detect_result = None
         self._busy = False
         self._progress_job = None
-        self.current_page = "detect"
+        self.current_page = "overview"
         self._log_collapsed = False
 
         root.title("{} {} —— {}".format(C.APP_NAME, C.APP_NAME_CN, C.MOTTO))
@@ -238,12 +249,14 @@ class StarGustApp:
         self.pages_box = ttk.Frame(self.content, style="Card.TFrame")
         self.pages_box.pack(fill=tk.BOTH, expand=True)
 
+        self._build_page_overview()
         self._build_page_detect()
         self._build_page_port()
         self._build_page_net()
         self._build_page_diag()
-        self._build_page_mon()
         self._build_page_proxy()
+        self._build_page_feedback()
+        self._build_page_settings()
 
         # 全局日志区（可折叠）+ 状态栏
         self._build_log()
@@ -252,13 +265,16 @@ class StarGustApp:
         self.status.pack(fill=tk.X, side=tk.BOTTOM)
 
         # 默认页 + 快捷键
-        self.show_page("detect")
+        self.show_page("overview")
         self._bind_shortcuts()
 
     def _new_page(self, key):
-        """创建叠放页面 frame，返回之"""
+        """创建叠放页面 frame，返回之
+        用 place(relx=0,rely=0,relwidth=1,relheight=1) 让各页重叠占满同一区域，
+        tkraise() 才能将目标页提到最前（pack 顺序布局会分摊空间、盖不住兄弟页）。
+        """
         frame = ttk.Frame(self.pages_box, style="Card.TFrame")
-        frame.pack(fill=tk.BOTH, expand=True)
+        frame.place(x=0, y=0, relwidth=1, relheight=1)
         setattr(self, "page_" + key, frame)
         return frame
 
@@ -484,33 +500,88 @@ class StarGustApp:
         self.diag_tree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
         self._add_hscroll(page, self.diag_tree)
 
-    # ------------------------------------------------- 页面5：实时监控
-    def _build_page_mon(self):
-        page = self._new_page("mon")
+    # ------------------------------------------------- 页面1：本机概览
+    def _build_page_overview(self):
+        page = self._new_page("overview")
 
-        mon_bar = ttk.Frame(page, style="Card.TFrame")
-        mon_bar.pack(fill=tk.X, pady=(0, 10))
-        self.mon_auto_var = tk.BooleanVar(value=False)
-        self.chk_mon_auto = ttk.Checkbutton(mon_bar, text="自动刷新（每秒）",
+        # 控制栏：自动刷新 + 立即刷新 + 带宽 / TCP 概览
+        bar = ttk.Frame(page, style="Card.TFrame")
+        bar.pack(fill=tk.X, pady=(0, 10))
+        self.mon_auto_var = tk.BooleanVar(value=True)
+        self.chk_mon_auto = ttk.Checkbutton(bar, text="自动刷新",
                                             variable=self.mon_auto_var,
                                             command=self.on_monitor_auto)
         self.chk_mon_auto.pack(side=tk.LEFT)
-        self.btn_mon_refresh = ttk.Button(mon_bar, text="立即刷新",
+        self.btn_mon_refresh = ttk.Button(bar, text="立即刷新",
                                           style="Accent.TButton",
                                           command=self.on_monitor_refresh)
         self.btn_mon_refresh.pack(side=tk.LEFT, padx=8)
-        self.mon_bw = ttk.Label(mon_bar, text="↓ --  ↑ --",
+        self.mon_bw = ttk.Label(bar, text="↓ --  ↑ --",
                                 style="Card.TFrame",
                                 foreground="#6C5CE7",
                                 font=("Microsoft YaHei UI", 13, "bold"))
         self.mon_bw.pack(side=tk.LEFT, padx=(12, 0))
-        self.mon_stat = ttk.Label(mon_bar, text="TCP 连接: --",
+        self.mon_stat = ttk.Label(bar, text="TCP 连接: --",
                                   style="Card.TFrame",
                                   foreground="#455a64")
         self.mon_stat.pack(side=tk.LEFT, padx=(12, 0))
 
+        # 资源概览卡片：CPU / 内存 / 磁盘
+        res = ttk.Frame(page, style="Card.TFrame")
+        res.pack(fill=tk.X, pady=(0, 10))
+        self._res_labels = {}
+        for i, (key, title) in enumerate((
+                ("cpu", "CPU 使用率"),
+                ("mem", "内存占用"),
+                ("disk", "磁盘占用"))):
+            card = ttk.LabelFrame(res, text=title, padding=8)
+            card.pack(side=tk.LEFT, fill=tk.X, expand=True,
+                      padx=(0 if i == 0 else 8, 0))
+            value = ttk.Label(card, text="--", style="Card.TFrame",
+                              foreground="#6C5CE7",
+                              font=("Microsoft YaHei UI", 18, "bold"))
+            value.pack(anchor=tk.W)
+            bar_prog = ttk.Progressbar(card, mode="determinate", maximum=100)
+            bar_prog.pack(fill=tk.X, pady=(6, 2))
+            detail = ttk.Label(card, text="", style="Card.TFrame",
+                               foreground="#8a94a6", font=("Microsoft YaHei UI", 9))
+            detail.pack(anchor=tk.W)
+            self._res_labels[key] = (value, bar_prog, detail)
+
+        # 进程资源占用 Top 榜
+        proc_frame = ttk.LabelFrame(page, text="进程资源占用 Top 榜（点击行选中，可结束）",
+                                    padding=6)
+        proc_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        pcols = ("p_name", "p_pid", "p_cpu", "p_mem")
+        self.ptree_proc = ttk.Treeview(proc_frame, columns=pcols, show="headings",
+                                       height=6)
+        for cid, text, width, stretch in (
+            ("p_name", "进程", 220, True),
+            ("p_pid", "PID", 80, False),
+            ("p_cpu", "CPU 占用", 90, False),
+            ("p_mem", "内存占用", 100, False),
+        ):
+            self.ptree_proc.heading(cid, text=text)
+            self.ptree_proc.column(cid, width=width, anchor=tk.W, stretch=stretch)
+        self.ptree_proc.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        self._add_hscroll(proc_frame, self.ptree_proc)
+        proc_bar = ttk.Frame(proc_frame, style="Card.TFrame")
+        proc_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(6, 0))
+        self.btn_kill = ttk.Button(proc_bar, text="结束选中进程",
+                                   style="Danger.TButton",
+                                   command=self.on_kill_process)
+        self.btn_kill.pack(side=tk.LEFT)
+        self.proc_tip = ttk.Label(proc_bar, text="CPU 占用基于两次采样差分，需连续刷新后显示",
+                                  style="Card.TFrame", foreground="#8a94a6",
+                                  font=("Microsoft YaHei UI", 9))
+        self.proc_tip.pack(side=tk.LEFT, padx=(10, 0))
+
+        # 网络连接实时表
+        net_frame = ttk.LabelFrame(page, text="网络连接（实时）", padding=6)
+        net_frame.pack(fill=tk.BOTH, expand=True)
         mcols = ("m_proc", "m_pid", "m_local", "m_remote", "m_state")
-        self.mtree = ttk.Treeview(page, columns=mcols, show="headings")
+        self.mtree = ttk.Treeview(net_frame, columns=mcols, show="headings",
+                                  height=5)
         for cid, text, width, stretch in (
             ("m_proc", "进程", 150, False),
             ("m_pid", "PID", 70, False),
@@ -523,9 +594,10 @@ class StarGustApp:
         self.mtree.tag_configure("established", foreground="#1b5e20")
         self.mtree.tag_configure("listening", foreground="#1565c0")
         self.mtree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
-        self._add_hscroll(page, self.mtree)
+        self._add_hscroll(net_frame, self.mtree)
         self._mon_job = None
         self._mon_running = False
+        self._proc_snapshot = None
 
     # ------------------------------------------------- 页面6：代理管理
     def _build_page_proxy(self):
@@ -566,6 +638,160 @@ class StarGustApp:
                          style="Card.TFrame", foreground="#8a94a6")
         hint.pack(anchor=tk.W, pady=(16, 0))
 
+    # ------------------------------------------------- 页面7：反馈
+    def _build_page_feedback(self):
+        page = self._new_page("feedback")
+
+        tip = ttk.Label(page, text="遇到问题或有建议？填写下方内容，一键生成反馈文件，\n"
+                         "附带系统信息快照，方便您发送给开发者。",
+                        style="Card.TFrame", foreground="#8a94a6")
+        tip.pack(anchor=tk.W, pady=(0, 12))
+
+        fb_box = ttk.LabelFrame(page, text="反馈内容", padding=10)
+        fb_box.pack(fill=tk.BOTH, expand=True)
+        self.fb_text = tk.Text(fb_box, height=10, font=("Microsoft YaHei UI", 10),
+                               bg="#ffffff", fg=self.C_INK, relief="flat", bd=0,
+                               padx=6, pady=6, wrap=tk.WORD)
+        self.fb_text.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        self.fb_text.insert(tk.END, "请描述你遇到的问题或建议……")
+        self.fb_text.tag_add("ph", "1.0", "end")
+        self.fb_text.tag_configure("ph", foreground="#b7bfcc")
+        self.fb_text.bind("<FocusIn>", self._fb_focus_in)
+        self.fb_text.bind("<FocusOut>", self._fb_focus_out)
+        self._fb_placeholder = True
+
+        fb_bar = ttk.Frame(page, style="Card.TFrame")
+        fb_bar.pack(fill=tk.X, pady=(10, 0))
+        self.btn_fb_gen = ttk.Button(fb_bar, text="生成反馈文件",
+                                     style="Accent.TButton",
+                                     command=self.on_feedback_gen)
+        self.btn_fb_gen.pack(side=tk.LEFT)
+        self.btn_fb_clear = ttk.Button(fb_bar, text="清空", command=self.on_feedback_clear)
+        self.btn_fb_clear.pack(side=tk.LEFT, padx=8)
+        self.fb_status = ttk.Label(fb_bar, text="", style="Card.TFrame",
+                                   foreground="#8a94a6")
+        self.fb_status.pack(side=tk.LEFT, padx=(10, 0))
+
+    def _fb_focus_in(self, _e=None):
+        if self._fb_placeholder:
+            self.fb_text.delete("1.0", tk.END)
+            self._fb_placeholder = False
+
+    def _fb_focus_out(self, _e=None):
+        if not self.fb_text.get("1.0", tk.END).strip():
+            self.fb_text.insert(tk.END, "请描述你遇到的问题或建议……")
+            self.fb_text.tag_add("ph", "1.0", "end")
+            self._fb_placeholder = True
+
+    def on_feedback_clear(self):
+        self.fb_text.delete("1.0", tk.END)
+        self._fb_placeholder = True
+        self._fb_focus_out()
+        self.fb_status.configure(text="")
+        self._set_status("反馈内容已清空", "ok")
+
+    def on_feedback_gen(self):
+        from . import __init__ as pkg
+        content = self.fb_text.get("1.0", tk.END).strip()
+        if self._fb_placeholder or not content or content.startswith("请描述"):
+            self._set_status("请先填写反馈内容", "error")
+            return
+        try:
+            ver = getattr(pkg, "__version__", "未知")
+        except Exception:
+            ver = "未知"
+        # 系统信息快照
+        sys_lines = []
+        try:
+            sys_lines.append("系统版本: " + _get_os_version())
+            mem = sysinfo.get_memory()
+            if mem:
+                sys_lines.append("内存: 已用 {:.1f} / {:.1f} GB ({:.0f}%)".format(
+                    mem["used_gb"], mem["total_gb"], mem["pct"]))
+            disks = sysinfo.get_disks()
+            if disks:
+                d = max(disks, key=lambda x: x["pct"])
+                sys_lines.append("磁盘: {}盘 已用 {:.0f} / {:.0f} GB".format(
+                    d["drive"], d["used_gb"], d["total_gb"]))
+        except Exception:
+            pass
+        lines = [
+            "===== StarGust 反馈文件 =====",
+            "时间: {}".format(time.strftime("%Y-%m-%d %H:%M:%S")),
+            "版本: {}".format(ver),
+            "------ 反馈内容 ------",
+            content,
+            "------ 系统信息快照 ------",
+        ] + sys_lines
+        text = "\n".join(lines) + "\n"
+        try:
+            # 输出到程序所在目录（兼容源码与 PyInstaller 打包，避免写入只读 _MEIPASS）
+            if getattr(sys, "frozen", False):
+                base_dir = os.path.dirname(os.path.abspath(sys.executable))
+            else:
+                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            out_dir = os.path.join(base_dir, "feedback")
+            os.makedirs(out_dir, exist_ok=True)
+            path = os.path.join(out_dir, "feedback_{}.txt".format(
+                time.strftime("%Y%m%d_%H%M%S")))
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            self.log("反馈文件已生成: {}".format(path))
+            self.fb_status.configure(text="已生成：" + os.path.basename(path))
+            self._set_status("反馈文件已生成：" + path, "ok")
+            self.last_feedback_path = path
+        except Exception as e:
+            self.log("生成反馈文件失败: {}".format(e))
+            self._set_status("生成反馈文件失败：{}".format(e), "error")
+
+    # ------------------------------------------------- 页面8：设置
+    def _build_page_settings(self):
+        page = self._new_page("settings")
+
+        tip = ttk.Label(page, text="通用设置。修改后立即生效。",
+                        style="Card.TFrame", foreground="#8a94a6")
+        tip.pack(anchor=tk.W, pady=(0, 12))
+
+        gen = ttk.LabelFrame(page, text="常规", padding=10)
+        gen.pack(fill=tk.X)
+        self.set_auto_ov = tk.BooleanVar(value=True)
+        ttk.Checkbutton(gen, text="启动后默认进入本机概览（自动刷新）",
+                        variable=self.set_auto_ov,
+                        command=self.on_setting_overview).pack(anchor=tk.W)
+        self.set_log_fold = tk.BooleanVar(value=False)
+        ttk.Checkbutton(gen, text="启动时默认折叠日志区",
+                        variable=self.set_log_fold,
+                        command=self.on_setting_logfold).pack(anchor=tk.W, pady=(4, 0))
+
+        about = ttk.LabelFrame(page, text="关于", padding=10)
+        about.pack(fill=tk.X, pady=(10, 0))
+        try:
+            from . import __init__ as pkg
+            ver = getattr(pkg, "__version__", "开发版")
+        except Exception:
+            ver = "开发版"
+        ttk.Label(about, text="{} {} {}".format(C.APP_NAME, C.APP_NAME_CN, ver),
+                  style="Card.TFrame", font=("Microsoft YaHei UI", 11, "bold")
+                  ).pack(anchor=tk.W)
+        ttk.Label(about, text="{}".format(C.MOTTO),
+                  style="Card.TFrame", foreground="#8a94a6"
+                  ).pack(anchor=tk.W, pady=(2, 0))
+        ttk.Label(about, text="窗口快捷切换：Ctrl+1 ~ Ctrl+8 对应左侧导航 8 个模块。",
+                  style="Card.TFrame", foreground="#8a94a6"
+                  ).pack(anchor=tk.W, pady=(2, 0))
+
+    def on_setting_overview(self):
+        self.log("设置已更新：启动默认页 -> {}".format(
+            "本机概览" if self.set_auto_ov.get() else "残留检测"))
+        self._set_status("设置已更新", "ok")
+
+    def on_setting_logfold(self):
+        if self.set_log_fold.get() and not self._log_collapsed:
+            self._toggle_log()
+        elif not self.set_log_fold.get() and self._log_collapsed:
+            self._toggle_log()
+        self._set_status("日志折叠设置已更新", "ok")
+
     # ------------------------------------------------- 日志区（可折叠）
     def _build_log(self):
         log_card = ttk.Frame(self.root, style="TFrame", padding=(12, 0, 12, 12))
@@ -602,7 +828,7 @@ class StarGustApp:
 
     # ------------------------------------------------- 页面切换
     def show_page(self, key):
-        """切换大模块页面；离开「实时监控」暂停其后台刷新，切回自动恢复"""
+        """切换大模块页面；离开「本机概览」暂停其后台刷新，切回自动恢复"""
         self.current_page = key
         # 导航高亮
         for k, btn in self._nav_buttons.items():
@@ -611,15 +837,15 @@ class StarGustApp:
         # 页面提升
         frame = getattr(self, "page_" + key)
         frame.tkraise()
-        # 实时监控后台循环随页面暂停 / 恢复
-        if key != "mon" and getattr(self, "_mon_running", False):
+        # 概览后台循环随页面暂停 / 恢复
+        if key != "overview" and getattr(self, "_mon_running", False):
             self._stop_monitor_loop()
-        if key == "mon" and self.mon_auto_var.get() \
+        if key == "overview" and self.mon_auto_var.get() \
                 and not getattr(self, "_mon_running", False):
             self._start_monitor_loop()
 
     def _bind_shortcuts(self):
-        keys = ("detect", "port", "net", "diag", "mon", "proxy")
+        keys = tuple(k for k, _ in self.NAV_ITEMS)
         for i, key in enumerate(keys, 1):
             self.root.bind("<Control-{}>".format(i),
                            lambda e, k=key: self.show_page(k))
@@ -1332,17 +1558,27 @@ class StarGustApp:
         return "{} B/s".format(bps)
 
     def _monitor_collect(self):
-        """后台采集监控数据，返回 (bw, rows, stats)"""
+        """后台采集本机概览数据，返回 dict：带宽 / TCP / CPU / 内存 / 磁盘 / 进程榜"""
+        data = {"bw": None, "rows": [], "stats": {},
+                "cpu": None, "mem": None, "disks": [], "procs": []}
         try:
-            bw = monitor.get_bandwidth()
-            rows, stats = monitor.get_connections()
-            return bw, rows, stats
+            data["bw"], rows, stats = monitor.get_bandwidth(), *monitor.get_connections()
+            data["rows"], data["stats"] = rows, stats
         except Exception as e:
-            self.log("监控采集出错: {}".format(e))
-            return None, [], {}
+            self.log("网络采集出错: {}".format(e))
+        try:
+            data["cpu"] = sysinfo.get_cpu_percent()
+            data["mem"] = sysinfo.get_memory()
+            data["disks"] = sysinfo.get_disks()
+            procs, snap = sysinfo.get_top_processes(self._proc_snapshot)
+            data["procs"] = procs
+            self._proc_snapshot = snap
+        except Exception as e:
+            self.log("系统资源采集出错: {}".format(e))
+        return data
 
     def _apply_monitor(self, data):
-        bw, rows, stats = data
+        bw, rows, stats = data["bw"], data["rows"], data["stats"]
         if bw is not None:
             self.mon_bw.configure(text="↓ {}  ↑ {}".format(
                 self._fmt_bw(bw[0]), self._fmt_bw(bw[1])))
@@ -1351,6 +1587,38 @@ class StarGustApp:
         self.mon_stat.configure(text="TCP 连接 {} | 已建立 {} | 监听 {}".format(
             stats.get("total", 0), stats.get("established", 0),
             stats.get("listening", 0)))
+        # 系统资源卡片
+        if data["cpu"] is not None:
+            self._set_res_card("cpu", "{:.0f}%".format(data["cpu"]),
+                               data["cpu"], "单核均态即满")
+        else:
+            self._set_res_card("cpu", "--", 0, "暂不可用")
+        mem = data["mem"]
+        if mem:
+            self._set_res_card(
+                "mem", "{:.0f}%".format(mem["pct"]), mem["pct"],
+                "已用 {:.1f} / {:.1f} GB".format(mem["used_gb"], mem["total_gb"]))
+        else:
+            self._set_res_card("mem", "--", 0, "暂不可用")
+        disks = data["disks"]
+        if disks:
+            d = max(disks, key=lambda x: x["pct"])
+            self._set_res_card(
+                "disk", "{:.0f}%".format(d["pct"]), d["pct"],
+                "{}盘 {:.0f} / {:.0f} GB".format(d["drive"], d["used_gb"],
+                                                 d["total_gb"]))
+        else:
+            self._set_res_card("disk", "--", 0, "暂不可用")
+        # 进程资源占用 Top 榜
+        for i in self.ptree_proc.get_children():
+            self.ptree_proc.delete(i)
+        for p in data["procs"]:
+            cpu_txt = ("{:.1f} 核".format(p["cpu_cores"])
+                       if p["cpu_cores"] is not None else "…")
+            self.ptree_proc.insert("", tk.END, values=(
+                p["name"][:40], p["pid"], cpu_txt,
+                "{:.0f} MB".format(p["mem_mb"])))
+        # 网络连接实时表
         for i in self.mtree.get_children():
             self.mtree.delete(i)
         for r in rows:
@@ -1361,6 +1629,12 @@ class StarGustApp:
                               tags=(tag,) if tag else (), values=(
                                   r["process"], r["pid"], r["local"],
                                   r["remote"], r["state"]))
+
+    def _set_res_card(self, key, text, pct, detail):
+        value, prog, det = self._res_labels[key]
+        value.configure(text=text)
+        prog.configure(value=max(0.0, min(100.0, pct)))
+        det.configure(text=detail)
 
     def _mon_worker(self):
         data = self._monitor_collect()
@@ -1399,11 +1673,19 @@ class StarGustApp:
         if not getattr(self, "_mon_running", False):
             return
         try:
-            if not self._busy:
-                threading.Thread(target=self._mon_worker, daemon=True).start()
-            self._mon_job = self.root.after(1000, self._mon_tick)
+            # 上一轮采集未结束（typeperf 采样耗时）则跳过本轮，避免线程堆积
+            if not self._busy and not getattr(self, "_mon_busy", False):
+                self._mon_busy = True
+                threading.Thread(target=self._mon_worker_done, daemon=True).start()
+            self._mon_job = self.root.after(1500, self._mon_tick)
         except Exception:
             pass
+
+    def _mon_worker_done(self):
+        try:
+            self._mon_worker()
+        finally:
+            self._mon_busy = False
 
     def _stop_monitor_loop(self):
         self._mon_running = False
@@ -1413,6 +1695,39 @@ class StarGustApp:
             except Exception:
                 pass
             self._mon_job = None
+
+    # ------------------------------------------------------------ 结束进程
+    def on_kill_process(self):
+        sel = self.ptree_proc.selection()
+        if not sel:
+            self.log("请先在进程榜中选中要结束的进程")
+            self._set_status("未选中进程", "error")
+            return
+        values = self.ptree_proc.item(sel[0], "values")
+        name, pid = values[0], values[1]
+        if not messagebox.askyesno(
+                "结束进程",
+                "即将强制结束进程：\n\n  {}（PID {}）\n\n"
+                "该进程的未保存数据可能丢失。\n确认结束？".format(name, pid),
+                icon="warning"):
+            return
+        self.log("结束进程 {} (PID {})……".format(name, pid))
+        self._set_status("正在结束进程 {} (PID {})……".format(name, pid), "busy")
+        self._run_async(lambda: sysinfo.kill_process(int(pid)),
+                        lambda res: self._after_kill(name, pid, res))
+
+    def _after_kill(self, name, pid, res):
+        ok, msg = res
+        if ok:
+            self.log("  已结束进程 {} (PID {})".format(name, pid))
+            self._set_status("已结束进程 {} (PID {})".format(name, pid), "ok")
+            # 立即刷新一次进程榜（复用防堆积封装）
+            if not getattr(self, "_mon_busy", False):
+                self._mon_busy = True
+                threading.Thread(target=self._mon_worker_done, daemon=True).start()
+        else:
+            self.log("  结束进程失败: {}".format(msg))
+            self._set_status("结束进程 {} 失败（可能需要管理员权限）".format(name), "error")
 
     # ------------------------------------------------------------ 代理增强
     def _refresh_detect_light(self):
