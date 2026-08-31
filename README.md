@@ -1,16 +1,3 @@
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: d0cbf299c1fe88dadee21ddd749378e3_9140a470a55c11f1b8ae525400287e28
-    ReservedCode1: 9uSZdoetVb3t2//4aqaQOeSP32J6ZOUdCxJboBmbQBKnQAVccX8WTgMCUudcQtQ51RQPjvgyK0ufwb5hQLxfetfa18bwqYJUKrWoShjJFbiWFi1eupGFsMnGoMmDFBahjGPZhA9IbOsfr/D+727/Dh+JYeuDfqaIEISexf6Vf5HaHOO12FFc8qLj7lM=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: d0cbf299c1fe88dadee21ddd749378e3_9140a470a55c11f1b8ae525400287e28
-    ReservedCode2: 9uSZdoetVb3t2//4aqaQOeSP32J6ZOUdCxJboBmbQBKnQAVccX8WTgMCUudcQtQ51RQPjvgyK0ufwb5hQLxfetfa18bwqYJUKrWoShjJFbiWFi1eupGFsMnGoMmDFBahjGPZhA9IbOsfr/D+727/Dh+JYeuDfqaIEISexf6Vf5HaHOO12FFc8qLj7lM=
----
-
-
-
 # StarGust（星息）—— 网络代理残留一键清理工具
 
 > 风过尘尽，一切如新
