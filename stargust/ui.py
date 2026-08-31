@@ -1,13 +1,21 @@
 # -*- coding: utf-8 -*-
 """StarGust（星息）tkinter 图形界面
 
+布局架构：侧边导航 + 整页切换（tkraise）
+  - 左侧固定导航栏：6 大模块（残留检测 / 端口占用 / 网络连通 /
+    网络诊断 / 实时监控 / 代理管理）
+  - 右侧内容区：6 个页面 Frame 叠放，切换时 tkraise() 提升
+  - 全局区：进度条（内容区顶部）、日志区（可折叠）、状态栏（底部）
+
 交互原则：
   - 通知类信息一律进日志 + 状态栏，不弹窗打扰（静默）
   - 仅保留必要的安全确认弹窗（清理 / 还原 / 清缓存 / 强制恢复）
   - 长任务（全扫 / 清理 / 还原 / 强制恢复）运行时显示进度条
   - 任务结束在状态栏给出成功 / 失败着色提示
+  - 切换离开「实时监控」自动暂停其后台刷新循环，切回自动恢复
 """
 import os
+import queue
 import sys
 import threading
 import time
@@ -34,19 +42,35 @@ def _resource_path(rel):
 
 
 class StarGustApp:
+    # 侧边导航结构：key -> 显示名
+    NAV_ITEMS = (
+        ("detect", "残留检测"),
+        ("port", "端口占用"),
+        ("net", "网络连通"),
+        ("diag", "网络诊断"),
+        ("mon", "实时监控"),
+        ("proxy", "代理管理"),
+    )
+
     def __init__(self, root):
         self.root = root
         self.fail_count = 0
         self.detect_result = None
         self._busy = False
         self._progress_job = None
+        self.current_page = "detect"
+        self._log_collapsed = False
 
         root.title("{} {} —— {}".format(C.APP_NAME, C.APP_NAME_CN, C.MOTTO))
-        root.geometry("980x660")
-        root.minsize(860, 580)
+        root.geometry("1080x680")
+        root.minsize(980, 620)
+
+        # 线程安全队列：后台线程只入队，主线程 pump 消费（tkinter 禁止跨线程调用）
+        self._main_queue = queue.Queue()
 
         self._setup_style()
         self._build_ui()
+        self._start_pump()
         self._on_startup()
 
     # ------------------------------------------------------------------ UI
@@ -68,6 +92,8 @@ class StarGustApp:
         ACC_H = "#5A4BD1"     # 紫 hover
         # 供其他方法复用
         self.C_INK = INK
+        self._P = dict(BG=BG, CARD=CARD, INK=INK, MUT=MUT,
+                       LINE=LINE, ACC=ACC, ACC_H=ACC_H, FONT=FONT)
 
         # 全局
         self.style.configure(".", font=(FONT, 10), background=BG, foreground=INK)
@@ -104,7 +130,17 @@ class StarGustApp:
         self.style.map("Danger.TButton",
                        background=[("active", "#c8483d"), ("pressed", "#c8483d")])
 
-        # Notebook：扁平 tab
+        # 侧边导航（tk.Button 手绘扁平样式，选中态品牌紫）
+        self._nav_style = dict(
+            bg=BG, fg=INK, activebackground="#e9e7fb", activeforeground=ACC,
+            font=(FONT, 10), anchor="w", bd=0, relief="flat",
+            padx=14, pady=10, highlightthickness=0, cursor="hand2")
+        self._nav_style_sel = dict(
+            bg=ACC, fg="#ffffff", activebackground=ACC_H, activeforeground="#ffffff",
+            font=(FONT, 10, "bold"), anchor="w", bd=0, relief="flat",
+            padx=14, pady=10, highlightthickness=0, cursor="hand2")
+
+        # Notebook（兼容保留，现弃用）
         self.style.configure("TNotebook", background=BG, borderwidth=0)
         self.style.configure("TNotebook.Tab",
                              background="#e9ebf2", foreground=MUT,
@@ -160,6 +196,7 @@ class StarGustApp:
         except Exception:
             return None
 
+    # ---------------------------------------------------------------- 布局
     def _build_ui(self):
         # 顶部品牌横幅：logo + 标题 + 口号
         header = ttk.Frame(self.root, style="Header.TFrame", padding=(18, 12))
@@ -175,21 +212,70 @@ class StarGustApp:
         ttk.Label(title_box, text=C.MOTTO,
                   style="HeaderMotto.TLabel").pack(anchor=tk.W, pady=(2, 0))
 
-        # 主体卡片容器
-        body = ttk.Frame(self.root, style="TFrame", padding=12)
-        body.pack(fill=tk.BOTH, expand=True)
-        card = ttk.Frame(body, style="Card.TFrame", padding=12)
-        card.pack(fill=tk.BOTH, expand=True)
+        # 主体：左侧导航 + 右侧内容区
+        self.body = ttk.Frame(self.root, style="TFrame", padding=12)
+        self.body.pack(fill=tk.BOTH, expand=True)
 
-        # 操作按钮行
-        bar = ttk.Frame(card, style="Card.TFrame")
+        # 左侧导航栏
+        self.sidebar = ttk.Frame(self.body, style="TFrame", width=168)
+        self.sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
+        self.sidebar.pack_propagate(False)
+        self._nav_buttons = {}
+        for key, text in self.NAV_ITEMS:
+            btn = tk.Button(self.sidebar, text=text, command=lambda k=key: self.show_page(k))
+            btn.pack(fill=tk.X, pady=1)
+            self._nav_buttons[key] = btn
+
+        # 右侧内容容器（白色卡片）
+        self.content = ttk.Frame(self.body, style="Card.TFrame", padding=12)
+        self.content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 全局进度条（内容区顶部，跨页面可见）
+        self.progress = ttk.Progressbar(self.content, mode="determinate", maximum=100)
+        self.progress.pack(fill=tk.X, pady=(0, 10))
+
+        # 页面叠放容器
+        self.pages_box = ttk.Frame(self.content, style="Card.TFrame")
+        self.pages_box.pack(fill=tk.BOTH, expand=True)
+
+        self._build_page_detect()
+        self._build_page_port()
+        self._build_page_net()
+        self._build_page_diag()
+        self._build_page_mon()
+        self._build_page_proxy()
+
+        # 全局日志区（可折叠）+ 状态栏
+        self._build_log()
+        self.status = ttk.Label(self.root, text="就绪", anchor=tk.W,
+                                style="Status.TLabel")
+        self.status.pack(fill=tk.X, side=tk.BOTTOM)
+
+        # 默认页 + 快捷键
+        self.show_page("detect")
+        self._bind_shortcuts()
+
+    def _new_page(self, key):
+        """创建叠放页面 frame，返回之"""
+        frame = ttk.Frame(self.pages_box, style="Card.TFrame")
+        frame.pack(fill=tk.BOTH, expand=True)
+        setattr(self, "page_" + key, frame)
+        return frame
+
+    def _add_hscroll(self, parent, tree):
+        """为表格底部加横向滚动条"""
+        sb = ttk.Scrollbar(parent, orient=tk.HORIZONTAL, command=tree.xview)
+        tree.configure(xscrollcommand=sb.set)
+        sb.pack(fill=tk.X, side=tk.BOTTOM)
+
+    # ------------------------------------------------- 页面1：残留检测
+    def _build_page_detect(self):
+        page = self._new_page("detect")
+
+        bar = ttk.Frame(page, style="Card.TFrame")
         bar.pack(fill=tk.X, pady=(0, 10))
         self.btn_detect = ttk.Button(bar, text="检测残留", command=self.on_detect)
         self.btn_detect.pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_quick = ttk.Button(bar, text="快速端口扫描", command=self.on_quick_scan)
-        self.btn_quick.pack(side=tk.LEFT, padx=6)
-        self.btn_full = ttk.Button(bar, text="全端口扫描", command=self.on_full_scan)
-        self.btn_full.pack(side=tk.LEFT, padx=6)
         ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=12)
         self.btn_clean = ttk.Button(bar, text="一键清理", style="Accent.TButton",
                                     command=self.on_clean)
@@ -198,90 +284,58 @@ class StarGustApp:
         self.btn_restore.pack(side=tk.LEFT, padx=6)
         self.btn_cache = ttk.Button(bar, text="清缓存", command=self.on_clear_cache)
         self.btn_cache.pack(side=tk.LEFT, padx=6)
-
         # 强制按钮：初始隐藏，普通清理连续失败 3 次后出现
         self.btn_force = ttk.Button(bar, text="⚠ 强制恢复网络",
                                     style="Danger.TButton", command=self.on_force)
         self.btn_force.pack(side=tk.LEFT, padx=6)
         self.btn_force.pack_forget()
 
-        # 进度条
-        self.progress = ttk.Progressbar(card, mode="determinate", maximum=100)
-        self.progress.pack(fill=tk.X, pady=(0, 10))
-
-        self.notebook = ttk.Notebook(card)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
-
-        # --- Tab1 残留检测 ---
-        tab_detect = ttk.Frame(self.notebook, style="TNotebook.TFrame")
-        self.notebook.add(tab_detect, text="残留检测")
         cols = ("category", "item", "detail", "action")
-        self.tree = ttk.Treeview(tab_detect, columns=cols, show="headings")
-        for cid, text, width in (
-            ("category", "类别", 90),
-            ("item", "项目", 200),
-            ("detail", "值 / 详情", 430),
-            ("action", "处置方式", 150),
+        self.tree = ttk.Treeview(page, columns=cols, show="headings")
+        for cid, text, width, stretch in (
+            ("category", "类别", 90, False),
+            ("item", "项目", 180, False),
+            ("detail", "值 / 详情", 380, True),
+            ("action", "处置方式", 140, False),
         ):
             self.tree.heading(cid, text=text)
-            self.tree.column(cid, width=width, anchor=tk.W)
+            self.tree.column(cid, width=width, anchor=tk.W, stretch=stretch)
         self.tree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        self._add_hscroll(page, self.tree)
 
         # 自启动项勾选区
-        self.auto_frame = ttk.LabelFrame(tab_detect,
+        self.auto_frame = ttk.LabelFrame(page,
                                          text="自启动项（代理相关，勾选后随清理删除）",
                                          padding=8)
         self.auto_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(8, 0))
         self.auto_vars = []
 
-        # 代理增强区：一键设置 / 取消系统代理 + 连通性测试
-        self.proxy_frame = ttk.LabelFrame(tab_detect,
-                                          text="代理增强：一键设置 / 取消系统代理 · 连通性测试",
-                                          padding=8)
-        self.proxy_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(8, 0))
-        pf = ttk.Frame(self.proxy_frame, style="Card.TFrame")
-        pf.pack(fill=tk.X)
-        ttk.Label(pf, text="Host:", style="Card.TFrame").pack(side=tk.LEFT)
-        self.proxy_host_var = tk.StringVar(value="127.0.0.1")
-        ttk.Entry(pf, textvariable=self.proxy_host_var, width=16).pack(
-            side=tk.LEFT, padx=(4, 10))
-        ttk.Label(pf, text="Port:", style="Card.TFrame").pack(side=tk.LEFT)
-        self.proxy_port_var = tk.StringVar(value="7890")
-        ttk.Entry(pf, textvariable=self.proxy_port_var, width=8).pack(
-            side=tk.LEFT, padx=(4, 10))
-        self.btn_set_proxy = ttk.Button(pf, text="设置系统代理",
-                                        style="Accent.TButton",
-                                        command=self.on_set_proxy)
-        self.btn_set_proxy.pack(side=tk.LEFT, padx=4)
-        self.btn_cancel_proxy = ttk.Button(pf, text="取消系统代理",
-                                           command=self.on_cancel_proxy)
-        self.btn_cancel_proxy.pack(side=tk.LEFT, padx=4)
-        self.btn_test_proxy = ttk.Button(pf, text="测试代理连通性",
-                                         command=self.on_test_proxy)
-        self.btn_test_proxy.pack(side=tk.LEFT, padx=4)
-        self.proxy_status = ttk.Label(self.proxy_frame, text="",
-                                      style="Card.TFrame",
-                                      foreground="#8a94a6")
-        self.proxy_status.pack(anchor=tk.W, pady=(6, 0))
+    # ------------------------------------------------- 页面2：端口占用
+    def _build_page_port(self):
+        page = self._new_page("port")
 
-        # --- Tab2 端口占用 ---
-        tab_port = ttk.Frame(self.notebook, style="TNotebook.TFrame")
-        self.notebook.add(tab_port, text="端口占用")
+        bar = ttk.Frame(page, style="Card.TFrame")
+        bar.pack(fill=tk.X, pady=(0, 10))
+        self.btn_quick = ttk.Button(bar, text="快速端口扫描", command=self.on_quick_scan)
+        self.btn_quick.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_full = ttk.Button(bar, text="全端口扫描", command=self.on_full_scan)
+        self.btn_full.pack(side=tk.LEFT, padx=6)
+
         pcols = ("port", "pid", "process", "known")
-        self.ptree = ttk.Treeview(tab_port, columns=pcols, show="headings")
-        for cid, text, width in (
-            ("port", "端口", 90),
-            ("pid", "PID", 90),
-            ("process", "占用进程", 300),
-            ("known", "代理常用端口", 120),
+        self.ptree = ttk.Treeview(page, columns=pcols, show="headings")
+        for cid, text, width, stretch in (
+            ("port", "端口", 90, False),
+            ("pid", "PID", 90, False),
+            ("process", "占用进程", 280, True),
+            ("known", "代理常用端口", 110, False),
         ):
             self.ptree.heading(cid, text=text)
-            self.ptree.column(cid, width=width, anchor=tk.W)
-        self.ptree.pack(fill=tk.BOTH, expand=True)
+            self.ptree.column(cid, width=width, anchor=tk.W, stretch=stretch)
+        self.ptree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        self._add_hscroll(page, self.ptree)
 
-        # 端口连通测试子区：主动 TCP 连接探测指定 目标IP:端口
-        self.pt_frame = ttk.LabelFrame(tab_port,
-                                       text="端口连通测试（主动 TCP 连接探测）",
+        # 端口连通测试子区
+        self.pt_frame = ttk.LabelFrame(page, text="端口连通测试（主动 TCP 连接探测）",
                                        padding=8)
         self.pt_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(8, 0))
         ptb = ttk.Frame(self.pt_frame, style="Card.TFrame")
@@ -324,57 +378,59 @@ class StarGustApp:
         self.ptree_test.tag_configure("fail", foreground="#b71c1c")
         self.ptree_test.pack(fill=tk.X, pady=(6, 0))
 
-        # --- Tab3 网络连通 ---
-        tab_net = ttk.Frame(self.notebook, style="TNotebook.TFrame")
-        self.notebook.add(tab_net, text="网络连通")
-        net_bar = ttk.Frame(tab_net, style="TNotebook.TFrame")
-        net_bar.pack(fill=tk.X, pady=(0, 8))
+    # ------------------------------------------------- 页面3：网络连通
+    def _build_page_net(self):
+        page = self._new_page("net")
+
+        net_bar = ttk.Frame(page, style="Card.TFrame")
+        net_bar.pack(fill=tk.X, pady=(0, 10))
         self.btn_net = ttk.Button(net_bar, text="检测内外网连通性",
                                   style="Accent.TButton", command=self.on_net_check)
         self.btn_net.pack(side=tk.LEFT)
-        self.net_summary = ttk.Label(net_bar, text="未检测", style="TNotebook.TFrame",
+        self.net_summary = ttk.Label(net_bar, text="未检测", style="Card.TFrame",
                                      foreground="#8a94a6")
         self.net_summary.pack(side=tk.LEFT, padx=(14, 0))
 
         ncols = ("zone", "target", "ip", "port", "latency", "status")
-        self.ntree = ttk.Treeview(tab_net, columns=ncols, show="headings")
-        for cid, text, width in (
-            ("zone", "区域", 70),
-            ("target", "目标", 240),
-            ("ip", "解析 IP", 130),
-            ("port", "端口", 60),
-            ("latency", "延迟", 90),
-            ("status", "状态", 170),
+        self.ntree = ttk.Treeview(page, columns=ncols, show="headings")
+        for cid, text, width, stretch in (
+            ("zone", "区域", 70, False),
+            ("target", "目标", 200, True),
+            ("ip", "解析 IP", 130, False),
+            ("port", "端口", 60, False),
+            ("latency", "延迟", 90, False),
+            ("status", "状态", 170, False),
         ):
             self.ntree.heading(cid, text=text)
-            self.ntree.column(cid, width=width, anchor=tk.W)
+            self.ntree.column(cid, width=width, anchor=tk.W, stretch=stretch)
         self.ntree.tag_configure("ok", foreground="#1b5e20")
         self.ntree.tag_configure("fail", foreground="#b71c1c")
-        self.ntree.pack(fill=tk.BOTH, expand=True)
+        self.ntree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        self._add_hscroll(page, self.ntree)
 
-        # --- Tab4 网络诊断 ---
-        tab_diag = ttk.Frame(self.notebook, style="TNotebook.TFrame")
-        self.notebook.add(tab_diag, text="网络诊断")
+    # ------------------------------------------------- 页面4：网络诊断
+    def _build_page_diag(self):
+        page = self._new_page("diag")
 
-        diag_bar = ttk.Frame(tab_diag, style="TNotebook.TFrame")
-        diag_bar.pack(fill=tk.X, pady=(0, 6))
+        diag_bar = ttk.Frame(page, style="Card.TFrame")
+        diag_bar.pack(fill=tk.X, pady=(0, 10))
 
         # 行1：Ping | Tracert
-        row1 = ttk.Frame(diag_bar, style="TNotebook.TFrame")
+        row1 = ttk.Frame(diag_bar, style="Card.TFrame")
         row1.pack(fill=tk.X, pady=(0, 6))
         ping_box = ttk.LabelFrame(row1, text="Ping 目标", padding=6)
         ping_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         ttk.Label(ping_box, text="目标:", style="Card.TFrame").pack(side=tk.LEFT)
         self.ping_host_var = tk.StringVar(value="www.baidu.com")
         ttk.Entry(ping_box, textvariable=self.ping_host_var,
-                  width=18).pack(side=tk.LEFT, padx=(4, 8))
+                  width=16).pack(side=tk.LEFT, padx=(4, 8))
         ttk.Label(ping_box, text="次数:", style="Card.TFrame").pack(side=tk.LEFT)
         self.ping_count_var = tk.StringVar(value="4")
         ttk.Spinbox(ping_box, from_=1, to=20, width=4,
                     textvariable=self.ping_count_var).pack(side=tk.LEFT, padx=(4, 8))
         ttk.Label(ping_box, text="超时(ms):", style="Card.TFrame").pack(side=tk.LEFT)
         self.ping_timeout_var = tk.StringVar(value="1000")
-        ttk.Spinbox(ping_box, from_=100, to=5000, increment=100, width=6,
+        ttk.Spinbox(ping_box, from_=100, to=5000, increment=100, width=5,
                     textvariable=self.ping_timeout_var).pack(side=tk.LEFT, padx=(4, 8))
         self.btn_ping = ttk.Button(ping_box, text="Ping",
                                    style="Accent.TButton", command=self.on_ping)
@@ -385,20 +441,20 @@ class StarGustApp:
         ttk.Label(tr_box, text="目标:", style="Card.TFrame").pack(side=tk.LEFT)
         self.tr_host_var = tk.StringVar(value="www.baidu.com")
         ttk.Entry(tr_box, textvariable=self.tr_host_var,
-                  width=18).pack(side=tk.LEFT, padx=(4, 8))
+                  width=16).pack(side=tk.LEFT, padx=(4, 8))
         self.btn_traceroute = ttk.Button(tr_box, text="路由追踪",
                                          command=self.on_traceroute)
         self.btn_traceroute.pack(side=tk.LEFT, padx=4)
 
         # 行2：DNS | 公网IP / 网卡
-        row2 = ttk.Frame(diag_bar, style="TNotebook.TFrame")
+        row2 = ttk.Frame(diag_bar, style="Card.TFrame")
         row2.pack(fill=tk.X, pady=(0, 6))
         dns_box = ttk.LabelFrame(row2, text="DNS 多源对比解析", padding=6)
         dns_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
         ttk.Label(dns_box, text="域名:", style="Card.TFrame").pack(side=tk.LEFT)
         self.dns_host_var = tk.StringVar(value="www.baidu.com")
         ttk.Entry(dns_box, textvariable=self.dns_host_var,
-                  width=18).pack(side=tk.LEFT, padx=(4, 8))
+                  width=16).pack(side=tk.LEFT, padx=(4, 8))
         self.btn_dns = ttk.Button(dns_box, text="多源解析", command=self.on_dns)
         self.btn_dns.pack(side=tk.LEFT, padx=4)
 
@@ -414,26 +470,26 @@ class StarGustApp:
                                       foreground="#8a94a6")
         self.diag_summary.pack(side=tk.LEFT, padx=(10, 0))
 
-        # 诊断结果表格
         dcols = ("diag_item", "diag_value", "diag_note")
-        self.diag_tree = ttk.Treeview(tab_diag, columns=dcols, show="headings")
-        for cid, text, width in (
-            ("diag_item", "项目 / 跳数", 220),
-            ("diag_value", "结果", 380),
-            ("diag_note", "备注", 220),
+        self.diag_tree = ttk.Treeview(page, columns=dcols, show="headings")
+        for cid, text, width, stretch in (
+            ("diag_item", "项目 / 跳数", 200, False),
+            ("diag_value", "结果", 340, True),
+            ("diag_note", "备注", 200, False),
         ):
             self.diag_tree.heading(cid, text=text)
-            self.diag_tree.column(cid, width=width, anchor=tk.W)
+            self.diag_tree.column(cid, width=width, anchor=tk.W, stretch=stretch)
         self.diag_tree.tag_configure("ok", foreground="#1b5e20")
         self.diag_tree.tag_configure("fail", foreground="#b71c1c")
-        self.diag_tree.pack(fill=tk.BOTH, expand=True)
+        self.diag_tree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        self._add_hscroll(page, self.diag_tree)
 
-        # --- Tab5 实时监控 ---
-        tab_mon = ttk.Frame(self.notebook, style="TNotebook.TFrame")
-        self.notebook.add(tab_mon, text="实时监控")
+    # ------------------------------------------------- 页面5：实时监控
+    def _build_page_mon(self):
+        page = self._new_page("mon")
 
-        mon_bar = ttk.Frame(tab_mon, style="TNotebook.TFrame")
-        mon_bar.pack(fill=tk.X, pady=(0, 6))
+        mon_bar = ttk.Frame(page, style="Card.TFrame")
+        mon_bar.pack(fill=tk.X, pady=(0, 10))
         self.mon_auto_var = tk.BooleanVar(value=False)
         self.chk_mon_auto = ttk.Checkbutton(mon_bar, text="自动刷新（每秒）",
                                             variable=self.mon_auto_var,
@@ -444,46 +500,154 @@ class StarGustApp:
                                           command=self.on_monitor_refresh)
         self.btn_mon_refresh.pack(side=tk.LEFT, padx=8)
         self.mon_bw = ttk.Label(mon_bar, text="↓ --  ↑ --",
-                                style="TNotebook.TFrame",
+                                style="Card.TFrame",
                                 foreground="#6C5CE7",
                                 font=("Microsoft YaHei UI", 13, "bold"))
         self.mon_bw.pack(side=tk.LEFT, padx=(12, 0))
         self.mon_stat = ttk.Label(mon_bar, text="TCP 连接: --",
-                                  style="TNotebook.TFrame",
+                                  style="Card.TFrame",
                                   foreground="#455a64")
         self.mon_stat.pack(side=tk.LEFT, padx=(12, 0))
 
         mcols = ("m_proc", "m_pid", "m_local", "m_remote", "m_state")
-        self.mtree = ttk.Treeview(tab_mon, columns=mcols, show="headings")
-        for cid, text, width in (
-            ("m_proc", "进程", 170),
-            ("m_pid", "PID", 70),
-            ("m_local", "本地地址", 190),
-            ("m_remote", "远端地址", 200),
-            ("m_state", "状态", 100),
+        self.mtree = ttk.Treeview(page, columns=mcols, show="headings")
+        for cid, text, width, stretch in (
+            ("m_proc", "进程", 150, False),
+            ("m_pid", "PID", 70, False),
+            ("m_local", "本地地址", 180, True),
+            ("m_remote", "远端地址", 190, True),
+            ("m_state", "状态", 100, False),
         ):
             self.mtree.heading(cid, text=text)
-            self.mtree.column(cid, width=width, anchor=tk.W)
+            self.mtree.column(cid, width=width, anchor=tk.W, stretch=stretch)
         self.mtree.tag_configure("established", foreground="#1b5e20")
         self.mtree.tag_configure("listening", foreground="#1565c0")
-        self.mtree.pack(fill=tk.BOTH, expand=True)
+        self.mtree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
+        self._add_hscroll(page, self.mtree)
         self._mon_job = None
         self._mon_running = False
 
-        # --- 日志区 ---
-        log_frame = ttk.LabelFrame(body, text="日志", padding=6)
-        log_frame.pack(fill=tk.X, pady=(10, 0))
-        self.log_text = tk.Text(log_frame, height=8, state=tk.DISABLED,
+    # ------------------------------------------------- 页面6：代理管理
+    def _build_page_proxy(self):
+        page = self._new_page("proxy")
+
+        tip = ttk.Label(page, text="设置 / 取消系统代理，并测试代理连通性。",
+                        style="Card.TFrame", foreground="#8a94a6")
+        tip.pack(anchor=tk.W, pady=(0, 12))
+
+        proxy_card = ttk.LabelFrame(page, text="系统代理", padding=10)
+        proxy_card.pack(fill=tk.X)
+        pf = ttk.Frame(proxy_card, style="Card.TFrame")
+        pf.pack(fill=tk.X, pady=(4, 4))
+        ttk.Label(pf, text="Host:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.proxy_host_var = tk.StringVar(value="127.0.0.1")
+        ttk.Entry(pf, textvariable=self.proxy_host_var, width=18).pack(
+            side=tk.LEFT, padx=(4, 10))
+        ttk.Label(pf, text="Port:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.proxy_port_var = tk.StringVar(value="7890")
+        ttk.Entry(pf, textvariable=self.proxy_port_var, width=8).pack(
+            side=tk.LEFT, padx=(4, 10))
+        self.btn_set_proxy = ttk.Button(pf, text="设置系统代理",
+                                        style="Accent.TButton",
+                                        command=self.on_set_proxy)
+        self.btn_set_proxy.pack(side=tk.LEFT, padx=4)
+        self.btn_cancel_proxy = ttk.Button(pf, text="取消系统代理",
+                                           command=self.on_cancel_proxy)
+        self.btn_cancel_proxy.pack(side=tk.LEFT, padx=4)
+        self.btn_test_proxy = ttk.Button(pf, text="测试代理连通性",
+                                         command=self.on_test_proxy)
+        self.btn_test_proxy.pack(side=tk.LEFT, padx=4)
+        self.proxy_status = ttk.Label(proxy_card, text="", style="Card.TFrame",
+                                      foreground="#8a94a6")
+        self.proxy_status.pack(anchor=tk.W, pady=(8, 0))
+
+        hint = ttk.Label(page, text="提示：代理增强仅操作系统代理与代理相关环境变量，\n"
+                         "不会修改 PATH 等其它系统变量。",
+                         style="Card.TFrame", foreground="#8a94a6")
+        hint.pack(anchor=tk.W, pady=(16, 0))
+
+    # ------------------------------------------------- 日志区（可折叠）
+    def _build_log(self):
+        log_card = ttk.Frame(self.root, style="TFrame", padding=(12, 0, 12, 12))
+        log_card.pack(fill=tk.X)
+        head = ttk.Frame(log_card, style="TFrame")
+        head.pack(fill=tk.X, pady=(2, 4))
+        ttk.Label(head, text="日志", style="TFrame",
+                  foreground="#5b6472", font=("Microsoft YaHei UI", 9, "bold")
+                  ).pack(side=tk.LEFT)
+        self.btn_log_toggle = tk.Button(
+            head, text="收起 ▾", command=self._toggle_log,
+            bd=0, relief="flat", bg="#f5f6fa", fg="#8a94a6",
+            activebackground="#e9e7fb", activeforeground="#6C5CE7",
+            font=("Microsoft YaHei UI", 9), padx=6, cursor="hand2",
+            highlightthickness=0)
+        self.btn_log_toggle.pack(side=tk.RIGHT)
+
+        self.log_frame = ttk.Frame(log_card, style="Card.TFrame", padding=6)
+        self.log_frame.pack(fill=tk.X)
+        self.log_text = tk.Text(self.log_frame, height=7, state=tk.DISABLED,
                                 font=("Consolas", 9), bg="#ffffff", fg=self.C_INK,
                                 relief="flat", bd=0, padx=4, pady=4)
         self.log_text.pack(fill=tk.X)
 
-        # 状态栏
-        self.status = ttk.Label(self.root, text="就绪", anchor=tk.W,
-                                style="Status.TLabel")
-        self.status.pack(fill=tk.X, side=tk.BOTTOM)
+    def _toggle_log(self):
+        if self._log_collapsed:
+            self.log_text.pack(fill=tk.X)
+            self._log_collapsed = False
+            self.btn_log_toggle.configure(text="收起 ▾")
+        else:
+            self.log_text.pack_forget()
+            self._log_collapsed = True
+            self.btn_log_toggle.configure(text="展开 ▸")
+
+    # ------------------------------------------------- 页面切换
+    def show_page(self, key):
+        """切换大模块页面；离开「实时监控」暂停其后台刷新，切回自动恢复"""
+        self.current_page = key
+        # 导航高亮
+        for k, btn in self._nav_buttons.items():
+            style = self._nav_style_sel if k == key else self._nav_style
+            btn.configure(**style)
+        # 页面提升
+        frame = getattr(self, "page_" + key)
+        frame.tkraise()
+        # 实时监控后台循环随页面暂停 / 恢复
+        if key != "mon" and getattr(self, "_mon_running", False):
+            self._stop_monitor_loop()
+        if key == "mon" and self.mon_auto_var.get() \
+                and not getattr(self, "_mon_running", False):
+            self._start_monitor_loop()
+
+    def _bind_shortcuts(self):
+        keys = ("detect", "port", "net", "diag", "mon", "proxy")
+        for i, key in enumerate(keys, 1):
+            self.root.bind("<Control-{}>".format(i),
+                           lambda e, k=key: self.show_page(k))
 
     # ------------------------------------------------------------ 状态与进度
+    def _start_pump(self):
+        """主线程轮询任务队列：后台线程结果统一在此消费（tkinter 线程安全）"""
+
+        def pump():
+            while True:
+                try:
+                    item = self._main_queue.get_nowait()
+                except queue.Empty:
+                    break
+                kind, payload = item
+                if kind == "finish":
+                    result, done, origin = payload
+                    self._finish(result, done, origin)
+                elif kind == "apply_mon":
+                    self._apply_monitor(payload)
+                elif kind == "status":
+                    self._set_status(*payload)
+                elif kind == "render_detect":
+                    self._render_detect(payload)
+            self._pump_job = self.root.after(50, pump)
+
+        self._pump_job = self.root.after(50, pump)
+
     def log(self, msg):
         stamp = time.strftime("%H:%M:%S")
         self.log_text.configure(state=tk.NORMAL)
@@ -520,34 +684,47 @@ class StarGustApp:
     def set_busy(self, flag):
         self._busy = flag
         state = tk.DISABLED if flag else tk.NORMAL
-        for b in (self.btn_detect, self.btn_quick, self.btn_full,
-                  self.btn_clean, self.btn_restore, self.btn_cache,
-                  self.btn_net, self.btn_set_proxy, self.btn_cancel_proxy,
-                  self.btn_test_proxy, self.btn_ptest, self.btn_ptest_many,
-                  self.btn_ping, self.btn_traceroute, self.btn_dns,
-                  self.btn_pubip, self.btn_adapters):
-            try:
-                b.configure(state=state)
-            except Exception:
-                pass
 
-    def _run_async(self, fn, done=None):
+        def walk(widget):
+            for w in widget.winfo_children():
+                if isinstance(w, (ttk.Button, tk.Button)):
+                    # 导航按钮不参与禁用
+                    if w is not self.sidebar and not self._is_nav(w):
+                        try:
+                            w.configure(state=state)
+                        except Exception:
+                            pass
+                elif isinstance(w, ttk.Checkbutton):
+                    try:
+                        w.configure(state=state)
+                    except Exception:
+                        pass
+                walk(w)
+
+        walk(self.content)
+
+    def _is_nav(self, widget):
+        return any(widget is b for b in self._nav_buttons.values())
+
+    def _run_async(self, fn, done=None, back_to=None):
         if self._busy:
             self.log("有任务执行中，请稍候……")
             return
         self.set_busy(True)
         self._start_progress()
+        # 记录任务发起页：完成后若用户已切走，自动切回结果页
+        origin = back_to or self.current_page
 
         def worker():
             try:
                 result = fn()
             except Exception as e:  # noqa: BLE001
                 result = ("__ERROR__", str(e))
-            self.root.after(0, lambda: self._finish(result, done))
+            self._main_queue.put(("finish", (result, done, origin)))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish(self, result, done):
+    def _finish(self, result, done, origin=None):
         self.set_busy(False)
         self._stop_progress()
         if isinstance(result, tuple) and result and result[0] == "__ERROR__":
@@ -556,6 +733,12 @@ class StarGustApp:
             return
         if done:
             done(result)
+        # 任务完成自动回结果页（用户切走时才切回，否则停留在当前页）
+        if origin and self.current_page != origin:
+            try:
+                self.show_page(origin)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------ 启动逻辑
     def _on_startup(self):
@@ -1181,10 +1364,7 @@ class StarGustApp:
 
     def _mon_worker(self):
         data = self._monitor_collect()
-        try:
-            self.root.after(0, lambda: self._apply_monitor(data))
-        except Exception:
-            pass
+        self._main_queue.put(("apply_mon", data))
 
     def on_monitor_refresh(self):
         if self._busy:
@@ -1199,11 +1379,8 @@ class StarGustApp:
         def worker():
             data = self._monitor_collect()
             self._mon_busy = False
-            try:
-                self.root.after(0, lambda: self._apply_monitor(data))
-                self.root.after(0, lambda: self._set_status("网络状态已刷新", "ok"))
-            except Exception:
-                pass
+            self._main_queue.put(("apply_mon", data))
+            self._main_queue.put(("status", ("网络状态已刷新", "ok")))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1244,7 +1421,7 @@ class StarGustApp:
         def worker():
             try:
                 re = detector.detect_all()
-                self.root.after(0, lambda: self._render_detect(re))
+                self._main_queue.put(("render_detect", re))
             except Exception:
                 pass
 
