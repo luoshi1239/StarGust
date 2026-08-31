@@ -13,10 +13,16 @@ import threading
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
-from PIL import Image, ImageTk
+
+# PIL 仅用于品牌 logo 缩放显示；缺失时程序照常运行（仅不显示 logo）
+try:
+    from PIL import Image, ImageTk
+except ImportError:
+    Image = ImageTk = None
 
 from . import constants as C
-from . import backup, cleaner, detector, netcheck, scanner
+from . import (backup, cleaner, detector, monitor, netcheck,
+               netdiag, porttest, proxy, scanner)
 
 
 def _resource_path(rel):
@@ -141,12 +147,16 @@ class StarGustApp:
         self.style.map("TCheckbutton", background=[("active", CARD)])
 
     def _load_logo(self):
-        """加载品牌 logo（打包后从 _MEIPASS 定位资源）"""
+        """加载品牌 logo（打包后从 _MEIPASS 定位资源）
+        优先 PIL 缩放 44x44；PIL 缺失时回退 tk.PhotoImage 原尺寸加载。
+        """
         try:
             path = _resource_path(os.path.join("stargust", "assets", "logo.png"))
-            img = Image.open(path)
-            img = img.resize((44, 44), Image.LANCZOS)
-            return ImageTk.PhotoImage(img)
+            if Image is not None:
+                img = Image.open(path)
+                img = img.resize((44, 44), Image.LANCZOS)
+                return ImageTk.PhotoImage(img)
+            return tk.PhotoImage(file=path)
         except Exception:
             return None
 
@@ -224,6 +234,36 @@ class StarGustApp:
         self.auto_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(8, 0))
         self.auto_vars = []
 
+        # 代理增强区：一键设置 / 取消系统代理 + 连通性测试
+        self.proxy_frame = ttk.LabelFrame(tab_detect,
+                                          text="代理增强：一键设置 / 取消系统代理 · 连通性测试",
+                                          padding=8)
+        self.proxy_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(8, 0))
+        pf = ttk.Frame(self.proxy_frame, style="Card.TFrame")
+        pf.pack(fill=tk.X)
+        ttk.Label(pf, text="Host:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.proxy_host_var = tk.StringVar(value="127.0.0.1")
+        ttk.Entry(pf, textvariable=self.proxy_host_var, width=16).pack(
+            side=tk.LEFT, padx=(4, 10))
+        ttk.Label(pf, text="Port:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.proxy_port_var = tk.StringVar(value="7890")
+        ttk.Entry(pf, textvariable=self.proxy_port_var, width=8).pack(
+            side=tk.LEFT, padx=(4, 10))
+        self.btn_set_proxy = ttk.Button(pf, text="设置系统代理",
+                                        style="Accent.TButton",
+                                        command=self.on_set_proxy)
+        self.btn_set_proxy.pack(side=tk.LEFT, padx=4)
+        self.btn_cancel_proxy = ttk.Button(pf, text="取消系统代理",
+                                           command=self.on_cancel_proxy)
+        self.btn_cancel_proxy.pack(side=tk.LEFT, padx=4)
+        self.btn_test_proxy = ttk.Button(pf, text="测试代理连通性",
+                                         command=self.on_test_proxy)
+        self.btn_test_proxy.pack(side=tk.LEFT, padx=4)
+        self.proxy_status = ttk.Label(self.proxy_frame, text="",
+                                      style="Card.TFrame",
+                                      foreground="#8a94a6")
+        self.proxy_status.pack(anchor=tk.W, pady=(6, 0))
+
         # --- Tab2 端口占用 ---
         tab_port = ttk.Frame(self.notebook, style="TNotebook.TFrame")
         self.notebook.add(tab_port, text="端口占用")
@@ -238,6 +278,51 @@ class StarGustApp:
             self.ptree.heading(cid, text=text)
             self.ptree.column(cid, width=width, anchor=tk.W)
         self.ptree.pack(fill=tk.BOTH, expand=True)
+
+        # 端口连通测试子区：主动 TCP 连接探测指定 目标IP:端口
+        self.pt_frame = ttk.LabelFrame(tab_port,
+                                       text="端口连通测试（主动 TCP 连接探测）",
+                                       padding=8)
+        self.pt_frame.pack(fill=tk.X, side=tk.BOTTOM, pady=(8, 0))
+        ptb = ttk.Frame(self.pt_frame, style="Card.TFrame")
+        ptb.pack(fill=tk.X)
+        ttk.Label(ptb, text="目标 IP:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.pt_host_var = tk.StringVar(value="127.0.0.1")
+        ttk.Entry(ptb, textvariable=self.pt_host_var, width=16).pack(
+            side=tk.LEFT, padx=(4, 10))
+        ttk.Label(ptb, text="端口:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.pt_port_var = tk.StringVar(value="7890")
+        self.pt_port_cb = ttk.Combobox(
+            ptb, textvariable=self.pt_port_var, width=10,
+            values=[str(p) for _, p in porttest.COMMON_PORTS],
+            state="normal")
+        self.pt_port_cb.pack(side=tk.LEFT, padx=(4, 10))
+        self.btn_ptest = ttk.Button(ptb, text="测试该端口",
+                                    style="Accent.TButton",
+                                    command=self.on_port_test)
+        self.btn_ptest.pack(side=tk.LEFT, padx=4)
+        self.btn_ptest_many = ttk.Button(ptb, text="测试全部常用端口",
+                                         command=self.on_port_test_many)
+        self.btn_ptest_many.pack(side=tk.LEFT, padx=4)
+        self.pt_summary = ttk.Label(self.pt_frame, text="",
+                                    style="Card.TFrame",
+                                    foreground="#8a94a6")
+        self.pt_summary.pack(anchor=tk.W, pady=(4, 0))
+
+        ptcols = ("p_host", "p_port", "p_status", "p_latency")
+        self.ptree_test = ttk.Treeview(self.pt_frame, columns=ptcols,
+                                       show="headings", height=4)
+        for cid, text, width in (
+            ("p_host", "目标", 150),
+            ("p_port", "端口", 70),
+            ("p_status", "状态", 180),
+            ("p_latency", "延迟", 90),
+        ):
+            self.ptree_test.heading(cid, text=text)
+            self.ptree_test.column(cid, width=width, anchor=tk.W)
+        self.ptree_test.tag_configure("ok", foreground="#1b5e20")
+        self.ptree_test.tag_configure("fail", foreground="#b71c1c")
+        self.ptree_test.pack(fill=tk.X, pady=(6, 0))
 
         # --- Tab3 网络连通 ---
         tab_net = ttk.Frame(self.notebook, style="TNotebook.TFrame")
@@ -266,6 +351,124 @@ class StarGustApp:
         self.ntree.tag_configure("ok", foreground="#1b5e20")
         self.ntree.tag_configure("fail", foreground="#b71c1c")
         self.ntree.pack(fill=tk.BOTH, expand=True)
+
+        # --- Tab4 网络诊断 ---
+        tab_diag = ttk.Frame(self.notebook, style="TNotebook.TFrame")
+        self.notebook.add(tab_diag, text="网络诊断")
+
+        diag_bar = ttk.Frame(tab_diag, style="TNotebook.TFrame")
+        diag_bar.pack(fill=tk.X, pady=(0, 6))
+
+        # 行1：Ping | Tracert
+        row1 = ttk.Frame(diag_bar, style="TNotebook.TFrame")
+        row1.pack(fill=tk.X, pady=(0, 6))
+        ping_box = ttk.LabelFrame(row1, text="Ping 目标", padding=6)
+        ping_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        ttk.Label(ping_box, text="目标:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.ping_host_var = tk.StringVar(value="www.baidu.com")
+        ttk.Entry(ping_box, textvariable=self.ping_host_var,
+                  width=18).pack(side=tk.LEFT, padx=(4, 8))
+        ttk.Label(ping_box, text="次数:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.ping_count_var = tk.StringVar(value="4")
+        ttk.Spinbox(ping_box, from_=1, to=20, width=4,
+                    textvariable=self.ping_count_var).pack(side=tk.LEFT, padx=(4, 8))
+        ttk.Label(ping_box, text="超时(ms):", style="Card.TFrame").pack(side=tk.LEFT)
+        self.ping_timeout_var = tk.StringVar(value="1000")
+        ttk.Spinbox(ping_box, from_=100, to=5000, increment=100, width=6,
+                    textvariable=self.ping_timeout_var).pack(side=tk.LEFT, padx=(4, 8))
+        self.btn_ping = ttk.Button(ping_box, text="Ping",
+                                   style="Accent.TButton", command=self.on_ping)
+        self.btn_ping.pack(side=tk.LEFT, padx=4)
+
+        tr_box = ttk.LabelFrame(row1, text="Traceroute 路由追踪", padding=6)
+        tr_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(tr_box, text="目标:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.tr_host_var = tk.StringVar(value="www.baidu.com")
+        ttk.Entry(tr_box, textvariable=self.tr_host_var,
+                  width=18).pack(side=tk.LEFT, padx=(4, 8))
+        self.btn_traceroute = ttk.Button(tr_box, text="路由追踪",
+                                         command=self.on_traceroute)
+        self.btn_traceroute.pack(side=tk.LEFT, padx=4)
+
+        # 行2：DNS | 公网IP / 网卡
+        row2 = ttk.Frame(diag_bar, style="TNotebook.TFrame")
+        row2.pack(fill=tk.X, pady=(0, 6))
+        dns_box = ttk.LabelFrame(row2, text="DNS 多源对比解析", padding=6)
+        dns_box.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        ttk.Label(dns_box, text="域名:", style="Card.TFrame").pack(side=tk.LEFT)
+        self.dns_host_var = tk.StringVar(value="www.baidu.com")
+        ttk.Entry(dns_box, textvariable=self.dns_host_var,
+                  width=18).pack(side=tk.LEFT, padx=(4, 8))
+        self.btn_dns = ttk.Button(dns_box, text="多源解析", command=self.on_dns)
+        self.btn_dns.pack(side=tk.LEFT, padx=4)
+
+        info_box = ttk.LabelFrame(row2, text="公网 / 本机", padding=6)
+        info_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.btn_pubip = ttk.Button(info_box, text="公网 IP + 归属地",
+                                    command=self.on_public_ip)
+        self.btn_pubip.pack(side=tk.LEFT, padx=4)
+        self.btn_adapters = ttk.Button(info_box, text="本机网卡信息",
+                                       command=self.on_adapters)
+        self.btn_adapters.pack(side=tk.LEFT, padx=4)
+        self.diag_summary = ttk.Label(info_box, text="", style="Card.TFrame",
+                                      foreground="#8a94a6")
+        self.diag_summary.pack(side=tk.LEFT, padx=(10, 0))
+
+        # 诊断结果表格
+        dcols = ("diag_item", "diag_value", "diag_note")
+        self.diag_tree = ttk.Treeview(tab_diag, columns=dcols, show="headings")
+        for cid, text, width in (
+            ("diag_item", "项目 / 跳数", 220),
+            ("diag_value", "结果", 380),
+            ("diag_note", "备注", 220),
+        ):
+            self.diag_tree.heading(cid, text=text)
+            self.diag_tree.column(cid, width=width, anchor=tk.W)
+        self.diag_tree.tag_configure("ok", foreground="#1b5e20")
+        self.diag_tree.tag_configure("fail", foreground="#b71c1c")
+        self.diag_tree.pack(fill=tk.BOTH, expand=True)
+
+        # --- Tab5 实时监控 ---
+        tab_mon = ttk.Frame(self.notebook, style="TNotebook.TFrame")
+        self.notebook.add(tab_mon, text="实时监控")
+
+        mon_bar = ttk.Frame(tab_mon, style="TNotebook.TFrame")
+        mon_bar.pack(fill=tk.X, pady=(0, 6))
+        self.mon_auto_var = tk.BooleanVar(value=False)
+        self.chk_mon_auto = ttk.Checkbutton(mon_bar, text="自动刷新（每秒）",
+                                            variable=self.mon_auto_var,
+                                            command=self.on_monitor_auto)
+        self.chk_mon_auto.pack(side=tk.LEFT)
+        self.btn_mon_refresh = ttk.Button(mon_bar, text="立即刷新",
+                                          style="Accent.TButton",
+                                          command=self.on_monitor_refresh)
+        self.btn_mon_refresh.pack(side=tk.LEFT, padx=8)
+        self.mon_bw = ttk.Label(mon_bar, text="↓ --  ↑ --",
+                                style="TNotebook.TFrame",
+                                foreground="#6C5CE7",
+                                font=("Microsoft YaHei UI", 13, "bold"))
+        self.mon_bw.pack(side=tk.LEFT, padx=(12, 0))
+        self.mon_stat = ttk.Label(mon_bar, text="TCP 连接: --",
+                                  style="TNotebook.TFrame",
+                                  foreground="#455a64")
+        self.mon_stat.pack(side=tk.LEFT, padx=(12, 0))
+
+        mcols = ("m_proc", "m_pid", "m_local", "m_remote", "m_state")
+        self.mtree = ttk.Treeview(tab_mon, columns=mcols, show="headings")
+        for cid, text, width in (
+            ("m_proc", "进程", 170),
+            ("m_pid", "PID", 70),
+            ("m_local", "本地地址", 190),
+            ("m_remote", "远端地址", 200),
+            ("m_state", "状态", 100),
+        ):
+            self.mtree.heading(cid, text=text)
+            self.mtree.column(cid, width=width, anchor=tk.W)
+        self.mtree.tag_configure("established", foreground="#1b5e20")
+        self.mtree.tag_configure("listening", foreground="#1565c0")
+        self.mtree.pack(fill=tk.BOTH, expand=True)
+        self._mon_job = None
+        self._mon_running = False
 
         # --- 日志区 ---
         log_frame = ttk.LabelFrame(body, text="日志", padding=6)
@@ -318,7 +521,11 @@ class StarGustApp:
         self._busy = flag
         state = tk.DISABLED if flag else tk.NORMAL
         for b in (self.btn_detect, self.btn_quick, self.btn_full,
-                  self.btn_clean, self.btn_restore, self.btn_cache, self.btn_net):
+                  self.btn_clean, self.btn_restore, self.btn_cache,
+                  self.btn_net, self.btn_set_proxy, self.btn_cancel_proxy,
+                  self.btn_test_proxy, self.btn_ptest, self.btn_ptest_many,
+                  self.btn_ping, self.btn_traceroute, self.btn_dns,
+                  self.btn_pubip, self.btn_adapters):
             try:
                 b.configure(state=state)
             except Exception:
@@ -713,6 +920,385 @@ class StarGustApp:
         self.log("缓存清理完成：删除 {} 份历史快照".format(n))
         self._refresh_status()
         self._set_status("缓存清理完成：删除 {} 份历史快照".format(n), "ok")
+
+    # ------------------------------------------------------------ 网络诊断
+    def _diag_clear(self):
+        for i in self.diag_tree.get_children():
+            self.diag_tree.delete(i)
+
+    def on_ping(self):
+        host = self.ping_host_var.get().strip()
+        if not host:
+            self._set_status("请输入 Ping 目标", "error")
+            return
+        try:
+            count = int(self.ping_count_var.get())
+            timeout = int(self.ping_timeout_var.get())
+        except ValueError:
+            self._set_status("次数 / 超时须为数字", "error")
+            return
+        self.log("Ping {}（{} 次，超时 {}ms）……".format(host, count, timeout))
+        self._set_status("Ping 执行中……", "busy")
+        self._run_async(lambda: netdiag.ping(host, count, timeout),
+                        self._render_ping)
+
+    def _render_ping(self, d):
+        self._diag_clear()
+        ok = d["received"] > 0
+        self.diag_tree.insert("", tk.END, tags=("ok" if ok else "fail",), values=(
+            "Ping 目标", d["target"],
+            "发送 {} / 接收 {}".format(d["sent"], d["received"])))
+        self.diag_tree.insert("", tk.END, values=(
+            "丢包率",
+            "{}%".format(d["loss_pct"] if d["loss_pct"] is not None else "-"),
+            ""))
+        if d["avg_ms"] is not None:
+            self.diag_tree.insert("", tk.END, values=(
+                "平均延迟", "{} ms".format(d["avg_ms"]), ""))
+            self.diag_tree.insert("", tk.END, values=(
+                "延迟范围", "{} ~ {} ms".format(d["min_ms"], d["max_ms"]), ""))
+        if not ok:
+            self.diag_tree.insert("", tk.END, tags=("fail",), values=(
+                "结果", "目标不可达或全部超时", ""))
+        msg = "Ping {}：丢包 {}%，平均 {}ms".format(
+            d["target"],
+            d["loss_pct"] if d["loss_pct"] is not None else "-",
+            "{} ms".format(d["avg_ms"]) if d["avg_ms"] is not None else "-")
+        self.log("  " + msg)
+        self._set_status(msg, "ok" if ok else "error")
+
+    def on_traceroute(self):
+        host = self.tr_host_var.get().strip()
+        if not host:
+            self._set_status("请输入路由追踪目标", "error")
+            return
+        self.log("路由追踪 {}……".format(host))
+        self._set_status("路由追踪执行中（可能需要数十秒）……", "busy")
+        self._run_async(lambda: netdiag.traceroute(host), self._render_traceroute)
+
+    def _render_traceroute(self, data):
+        hops, _raw = data
+        self._diag_clear()
+        if not hops:
+            self.diag_tree.insert("", tk.END, tags=("fail",), values=(
+                "路由追踪", "无结果", "目标不可达或全部超时"))
+            self._set_status("路由追踪无结果", "error")
+            return
+        for h in hops:
+            times = " / ".join("{}ms".format(t) for t in h["times"]) or "*"
+            self.diag_tree.insert("", tk.END, values=(
+                "跳 {}".format(h["hop"]), h["ip"] or "请求超时", times))
+        self._set_status("路由追踪完成：共 {} 跳".format(len(hops)), "ok")
+        self.log("  路由追踪完成：共 {} 跳".format(len(hops)))
+
+    def on_dns(self):
+        domain = self.dns_host_var.get().strip()
+        if not domain:
+            self._set_status("请输入域名", "error")
+            return
+        self.log("DNS 多源对比解析 {}……".format(domain))
+        self._set_status("DNS 解析中……", "busy")
+        self._run_async(lambda: netdiag.dns_query(domain), self._render_dns)
+
+    def _render_dns(self, results):
+        self._diag_clear()
+        ok_n = 0
+        for r in results:
+            ok = bool(r["addrs"])
+            if ok:
+                ok_n += 1
+            self.diag_tree.insert(
+                "", tk.END, tags=("ok" if ok else "fail",), values=(
+                    "{} ({})".format(r["label"], r["dns"]),
+                    "  ".join(r["addrs"]) if r["addrs"] else "无解析结果",
+                    "解析成功" if ok else "无记录 / 解析失败"))
+        self._set_status("DNS 解析完成：{}/{} 命中".format(ok_n, len(results)),
+                         "ok" if ok_n else "error")
+        self.log("  DNS 多源对比：{}/{} 个 DNS 命中".format(ok_n, len(results)))
+
+    def on_public_ip(self):
+        self.log("查询公网 IP 与归属地……")
+        self._set_status("查询公网 IP 中……", "busy")
+        self._run_async(netdiag.public_ip, self._render_public_ip)
+
+    def _render_public_ip(self, info):
+        self._diag_clear()
+        if info.get("ip"):
+            self.diag_tree.insert("", tk.END, tags=("ok",), values=(
+                "公网 IP", info["ip"], ""))
+            loc = "{} {} {}".format(info.get("country", ""),
+                                    info.get("region", ""),
+                                    info.get("city", "")).strip()
+            if loc:
+                self.diag_tree.insert("", tk.END, values=("归属地", loc, ""))
+            if info.get("isp"):
+                self.diag_tree.insert("", tk.END, values=("运营商", info["isp"], ""))
+            if info.get("org"):
+                self.diag_tree.insert("", tk.END, values=("组织", info["org"], ""))
+            self._set_status("公网 IP：{}".format(info["ip"]), "ok")
+            self.log("  公网 IP：{}".format(info["ip"]))
+            if info.get("error"):
+                self.diag_tree.insert("", tk.END, tags=("fail",), values=(
+                    "归属地", "查询失败", info["error"]))
+                self.log("  " + info["error"])
+        else:
+            self.diag_tree.insert("", tk.END, tags=("fail",), values=(
+                "公网 IP", "查询失败", info.get("error", "无法获取外网 IP")))
+            self._set_status("公网 IP 查询失败", "error")
+
+    def on_adapters(self):
+        self.log("读取本机网卡信息……")
+        self._set_status("读取网卡信息中……", "busy")
+        self._run_async(netdiag.local_adapters, self._render_adapters)
+
+    def _render_adapters(self, adapters):
+        self._diag_clear()
+        if not adapters:
+            self.diag_tree.insert("", tk.END, tags=("fail",), values=(
+                "网卡信息", "未获取到", "ipconfig 无输出或权限不足"))
+            self._set_status("网卡信息读取失败", "error")
+            return
+        for a in adapters:
+            self.diag_tree.insert("", tk.END, values=(
+                "网卡", a["name"], "MAC {}".format(a["mac"] or "-")))
+            self.diag_tree.insert("", tk.END, values=(
+                "  IPv4", a["ip"] or "-", "掩码 {}".format(a["mask"] or "-")))
+            self.diag_tree.insert("", tk.END, values=(
+                "  网关", a["gateway"] or "-",
+                "DNS {}".format(" ".join(a["dns"]) if a["dns"] else "-")))
+        self._set_status("已读取 {} 张网卡".format(len(adapters)), "ok")
+        self.log("  共读取 {} 张网卡".format(len(adapters)))
+
+    # ------------------------------------------------------------ 端口连通测试
+    def on_port_test(self):
+        host = self.pt_host_var.get().strip()
+        port = self.pt_port_var.get().strip()
+        if not host:
+            self._set_status("请输入目标 IP", "error")
+            return
+        if not port.isdigit() or not (1 <= int(port) <= 65535):
+            self._set_status("端口须为 1-65535 的数字", "error")
+            return
+        self.log("端口连通测试 {}:{}……".format(host, port))
+        self._set_status("测试端口 {}:{}……".format(host, port), "busy")
+        self._run_async(lambda: porttest.test_one(host, int(port)),
+                        self._render_port_test)
+
+    def on_port_test_many(self):
+        host = self.pt_host_var.get().strip()
+        if not host:
+            self._set_status("请输入目标 IP", "error")
+            return
+        ports = [str(p) for _, p in porttest.COMMON_PORTS]
+        self.log("并发测试 {} 的全部常用端口……".format(host))
+        self._set_status("测试全部常用端口中……", "busy")
+        self._run_async(lambda: porttest.test_many(host, ports),
+                        self._render_port_test_many)
+
+    def _render_port_test(self, r):
+        for i in self.ptree_test.get_children():
+            self.ptree_test.delete(i)
+        tag = "ok" if r["ok"] else "fail"
+        status = ("开放 · {} ms".format(r["latency"]) if r["ok"]
+                  else "关闭/拒绝 · {}".format(r["err"] or "无响应"))
+        self.ptree_test.insert("", tk.END, tags=(tag,), values=(
+            "{}:{}".format(r["host"], r["port"]), r["port"], status,
+            "{} ms".format(r["latency"]) if r["ok"] else "-"))
+        self.pt_summary.configure(
+            text="{}:{} {}".format(r["host"], r["port"],
+                                   "可连通" if r["ok"] else "不可连通"),
+            foreground="#1b5e20" if r["ok"] else "#b71c1c")
+        self.log("  端口 {}:{} -> {}".format(
+            r["host"], r["port"], "开放" if r["ok"] else "关闭/拒绝"))
+        self._set_status("端口测试完成：{}:{} {}".format(
+            r["host"], r["port"], "开放" if r["ok"] else "不可连通"),
+            "ok" if r["ok"] else "error")
+
+    def _render_port_test_many(self, rows):
+        for i in self.ptree_test.get_children():
+            self.ptree_test.delete(i)
+        open_n = 0
+        for r in rows:
+            if r["ok"]:
+                open_n += 1
+                tag = "ok"
+                status = "开放 · {} ms".format(r["latency"])
+                lat = "{} ms".format(r["latency"])
+            else:
+                tag = "fail"
+                status = "关闭/拒绝 · {}".format(r["err"] or "无响应")
+                lat = "-"
+            self.ptree_test.insert("", tk.END, tags=(tag,), values=(
+                "{}:{}".format(r["host"], r["port"]), r["port"], status, lat))
+        self.pt_summary.configure(
+            text="{} 个常用端口，开放 {} 个".format(len(rows), open_n),
+            foreground="#1b5e20" if open_n else "#b71c1c")
+        self.log("  常用端口测试：{} 个开放 / 共 {}".format(open_n, len(rows)))
+        self._set_status("常用端口测试完成：开放 {} / 共 {}".format(
+            open_n, len(rows)), "ok" if open_n else "error")
+
+    # ------------------------------------------------------------ 实时监控
+    @staticmethod
+    def _fmt_bw(bps):
+        if bps is None:
+            return "--"
+        if bps >= 1024 * 1024:
+            return "{:.2f} MB/s".format(bps / 1024 / 1024)
+        if bps >= 1024:
+            return "{:.1f} KB/s".format(bps / 1024)
+        return "{} B/s".format(bps)
+
+    def _monitor_collect(self):
+        """后台采集监控数据，返回 (bw, rows, stats)"""
+        try:
+            bw = monitor.get_bandwidth()
+            rows, stats = monitor.get_connections()
+            return bw, rows, stats
+        except Exception as e:
+            self.log("监控采集出错: {}".format(e))
+            return None, [], {}
+
+    def _apply_monitor(self, data):
+        bw, rows, stats = data
+        if bw is not None:
+            self.mon_bw.configure(text="↓ {}  ↑ {}".format(
+                self._fmt_bw(bw[0]), self._fmt_bw(bw[1])))
+        else:
+            self.mon_bw.configure(text="↓ --  ↑ --")
+        self.mon_stat.configure(text="TCP 连接 {} | 已建立 {} | 监听 {}".format(
+            stats.get("total", 0), stats.get("established", 0),
+            stats.get("listening", 0)))
+        for i in self.mtree.get_children():
+            self.mtree.delete(i)
+        for r in rows:
+            st = r["state"].lower()
+            tag = "established" if st == "established" else (
+                "listening" if st == "listening" else "")
+            self.mtree.insert("", tk.END,
+                              tags=(tag,) if tag else (), values=(
+                                  r["process"], r["pid"], r["local"],
+                                  r["remote"], r["state"]))
+
+    def _mon_worker(self):
+        data = self._monitor_collect()
+        try:
+            self.root.after(0, lambda: self._apply_monitor(data))
+        except Exception:
+            pass
+
+    def on_monitor_refresh(self):
+        if self._busy:
+            self.log("有任务执行中，请稍候……")
+            return
+        if getattr(self, "_mon_busy", False):
+            return
+        self._mon_busy = True
+        self.log("手动刷新网络实时监控……")
+        self._set_status("刷新网络状态中……", "busy")
+
+        def worker():
+            data = self._monitor_collect()
+            self._mon_busy = False
+            try:
+                self.root.after(0, lambda: self._apply_monitor(data))
+                self.root.after(0, lambda: self._set_status("网络状态已刷新", "ok"))
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_monitor_auto(self):
+        if self.mon_auto_var.get():
+            self._start_monitor_loop()
+        else:
+            self._stop_monitor_loop()
+
+    def _start_monitor_loop(self):
+        self._stop_monitor_loop()
+        self._mon_running = True
+        self._mon_tick()
+
+    def _mon_tick(self):
+        if not getattr(self, "_mon_running", False):
+            return
+        try:
+            if not self._busy:
+                threading.Thread(target=self._mon_worker, daemon=True).start()
+            self._mon_job = self.root.after(1000, self._mon_tick)
+        except Exception:
+            pass
+
+    def _stop_monitor_loop(self):
+        self._mon_running = False
+        if getattr(self, "_mon_job", None):
+            try:
+                self.root.after_cancel(self._mon_job)
+            except Exception:
+                pass
+            self._mon_job = None
+
+    # ------------------------------------------------------------ 代理增强
+    def _refresh_detect_light(self):
+        """静默刷新残留检测视图（代理变更后后台重检，不阻塞界面）"""
+
+        def worker():
+            try:
+                re = detector.detect_all()
+                self.root.after(0, lambda: self._render_detect(re))
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_set_proxy(self):
+        host = self.proxy_host_var.get().strip()
+        port = self.proxy_port_var.get().strip()
+        if not host or not port.isdigit():
+            self._set_status("请输入有效的 Host 与端口", "error")
+            return
+        self.log("设置系统代理 {}:{}……".format(host, port))
+        self._set_status("设置系统代理中……", "busy")
+        self._run_async(lambda: proxy.set_system_proxy(host, int(port)),
+                        self._after_proxy_op)
+
+    def on_cancel_proxy(self):
+        self.log("取消系统代理……")
+        self._set_status("取消系统代理中……", "busy")
+        self._run_async(proxy.cancel_system_proxy, self._after_proxy_op)
+
+    def on_test_proxy(self):
+        host = self.proxy_host_var.get().strip()
+        port = self.proxy_port_var.get().strip()
+        if not host or not port.isdigit():
+            self._set_status("请输入有效的 Host 与端口", "error")
+            return
+        self.log("TCP 探测代理 {}:{}……".format(host, port))
+        self._set_status("测试代理连通性中……", "busy")
+        self._run_async(lambda: proxy.test_proxy(host, int(port)),
+                        self._after_proxy_test)
+
+    def _after_proxy_op(self, res):
+        ok, msg = res
+        self.proxy_status.configure(
+            text=msg, foreground=("#1b5e20" if ok else "#b71c1c"))
+        self.log("  " + msg)
+        self._set_status(msg, "ok" if ok else "error")
+        # 代理变更后刷新残留检测视图
+        self._refresh_detect_light()
+
+    def _after_proxy_test(self, res):
+        ok, lat, err = res
+        host = self.proxy_host_var.get().strip()
+        port = self.proxy_port_var.get().strip()
+        if ok:
+            msg = "{}:{} 代理可连通，延迟 {} ms".format(host, port, lat)
+            self.proxy_status.configure(text=msg, foreground="#1b5e20")
+            self._set_status(msg, "ok")
+        else:
+            msg = "{}:{} 代理不可连通：{}".format(host, port, err or "无响应")
+            self.proxy_status.configure(text=msg, foreground="#b71c1c")
+            self._set_status(msg, "error")
+        self.log("  " + msg)
 
     def run(self):
         self.root.mainloop()

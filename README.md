@@ -1,10 +1,10 @@
-# StarGust（星息）—— 网络代理残留一键清理工具
+# StarGust（星息）—— 全功能网络工具箱
 
 > 风过尘尽，一切如新
 
 ## 简介
 
-StarGust 是一款 Windows 图形化工具，用于一键检测并清理网络代理残留，解决「代理软件退出后网络仍然异常」的问题。面向 FlClash、Clash Verge/Rev、Clash for Windows、v2rayN、sing-box、Shadowsocks 等常见代理软件场景。
+StarGust 是一款 Windows 图形化全功能网络工具箱。它既是一键检测并清理网络代理残留的工具（解决「代理软件退出后网络仍然异常」的问题），也内置了网络诊断、端口连通测试、网络实时监控与代理增强等常用网络功能。面向 FlClash、Clash Verge/Rev、Clash for Windows、v2rayN、sing-box、Shadowsocks 等常见代理软件场景。
 
 ## 使用方式
 
@@ -13,6 +13,7 @@ StarGust 是一款 Windows 图形化工具，用于一键检测并清理网络�
 
 ## 功能说明
 
+### 残留检测 Tab
 | 按钮 | 功能 |
 |---|---|
 | 检测残留 | 扫描系统代理 / WinHTTP / 环境变量 / 代理进程 / 自启动项 / 软件配置目录 |
@@ -22,6 +23,35 @@ StarGust 是一款 Windows 图形化工具，用于一键检测并清理网络�
 | 一键清理 | 关闭系统代理、重置 WinHTTP、删除代理环境变量、强制结束代理进程、删除勾选的自启动项 |
 | 一键还原 | 从「启动前快照」恢复系统代理与代理环境变量（优先），无启动前快照则用最近一次在用快照 |
 | 清缓存 | 删除历史增量快照（中间产物），保留「启动前快照」与「在用快照」 |
+
+### 代理增强（残留检测 Tab 底部）
+| 按钮 | 功能 |
+|---|---|
+| 设置系统代理 | 输入 Host:Port 一键写入注册表（ProxyEnable=1/ProxyServer）并广播 WM_SETTINGCHANGE 立即生效 |
+| 取消系统代理 | 一键恢复直连（ProxyEnable=0，清除 ProxyServer / AutoConfigURL） |
+| 测试代理连通性 | TCP 探测代理地址是否可达并给出延迟 |
+
+### 端口占用 Tab —— 端口连通测试子区
+| 按钮 | 功能 |
+|---|---|
+| 测试该端口 | 主动 TCP 连接探测指定「目标 IP:端口」是否开放，返回延迟 |
+| 测试全部常用端口 | 并发探测内置常用端口清单（80/443/22/3389/7890 等），逐个显示开放状态 |
+
+### 网络诊断 Tab
+| 功能 | 说明 |
+|---|---|
+| Ping 目标 | 可设次数与超时，统计延迟（最短/最长/平均）与丢包率 |
+| Traceroute 路由追踪 | 逐跳显示 IP 与延迟 |
+| DNS 多源对比解析 | 用阿里 / DNSPod / 114 / Google / Cloudflare 等公共 DNS 解析指定域名并对比 |
+| 公网 IP + 归属地 | 查询公网 IP 及国家/地区/城市/运营商（需可访问外网，依赖系统 curl） |
+| 本机网卡信息 | 列出全部网卡的 IP/掩码/网关/DNS/MAC |
+
+### 实时监控 Tab
+| 功能 | 说明 |
+|---|---|
+| 自动刷新（每秒）/ 立即刷新 | 实时显示上下行带宽（typeperf 采样） |
+| TCP 连接统计 | 连接总数 / 已建立 / 监听等分类计数 |
+| 连接列表 | 按进程分组展示本地/远端地址与状态（netstat + tasklist 映射） |
 
 ## 安全设计
 
@@ -40,7 +70,7 @@ StarGust 是一款 Windows 图形化工具，用于一键检测并清理网络�
 
 - 开发语言：Python 3.11（标准库 + tkinter，无第三方依赖）
 - 打包：PyInstaller 6.22，单文件，UAC 提权（requireAdministrator）
-- 核心机制：注册表（WinINET 系统代理、环境变量、Run 自启）、`netsh winhttp`、`netstat` / `tasklist` / `taskkill` 系统默认接口
+- 核心机制：注册表（WinINET 系统代理、环境变量、Run 自启）、`netsh winhttp`、`netstat` / `tasklist` / `taskkill` / `ping` / `tracert` / `nslookup` / `ipconfig` / `typeperf` / `curl` 系统默认接口
 - 运行环境：Windows 10 / 11（x64），需管理员权限
 
 ## 注意事项
@@ -48,5 +78,3 @@ StarGust 是一款 Windows 图形化工具，用于一键检测并清理网络�
 - 修改系统代理、环境变量、自启动项属系统级变更，请确认了解后再操作。
 - 还原环境变量后建议重启系统完全生效。
 - 清理后若发现软件路径异常，请使用「一键还原」恢复启动前状态。
-*（内容由AI生成，仅供参考）*
-*（内容由AI生成，仅供参考）*
