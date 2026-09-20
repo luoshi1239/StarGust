@@ -62,6 +62,16 @@ class StarGustApp:
         ("feedback", "反馈"),
         ("settings", "设置"),
     )
+    NAV_ICONS = {
+        "overview": "⌂",
+        "detect": "◎",
+        "port": "▦",
+        "net": "◌",
+        "diag": "◇",
+        "proxy": "⇄",
+        "feedback": "✎",
+        "settings": "⚙",
+    }
 
     def __init__(self, root):
         self.root = root
@@ -86,7 +96,7 @@ class StarGustApp:
 
     # ------------------------------------------------------------------ UI
     def _setup_style(self):
-        """现代化简约主题：浅灰底 + 白色卡片 + 品牌紫主色"""
+        """专业网络工具主题：冷静浅色底 + 白色面板 + 专业蓝主色"""
         self.style = ttk.Style(self.root)
         try:
             self.style.theme_use("clam")
@@ -94,67 +104,92 @@ class StarGustApp:
             pass
 
         FONT = "Microsoft YaHei UI"
-        BG = "#f5f6fa"        # 全局背景
-        CARD = "#ffffff"      # 卡片白
-        INK = "#2d3436"       # 主文字
-        MUT = "#8a94a6"       # 次要文字
-        LINE = "#e5e8ee"      # 分隔线
-        ACC = "#6C5CE7"       # 品牌紫
-        ACC_H = "#5A4BD1"     # 紫 hover
+        BG = "#f4f7fb"        # 全局背景
+        CARD = "#ffffff"      # 面板白
+        INK = "#172033"       # 主文字
+        MUT = "#667085"       # 次要文字
+        LINE = "#d9e2ef"      # 分隔线
+        SOFT = "#eef4fb"      # 弱底色
+        HEAD = "#f8fafd"      # 表头 / 工具栏底色
+        ACC = "#2563eb"       # 专业蓝
+        ACC_H = "#1d4ed8"     # 蓝 hover
+        ACC_SOFT = "#eaf2ff"  # 蓝弱底
+        OK = "#16a34a"
+        WARN = "#d97706"
+        DANGER = "#dc2626"
         # 供其他方法复用
         self.C_INK = INK
+        self.root.configure(bg=BG)
         self._P = dict(BG=BG, CARD=CARD, INK=INK, MUT=MUT,
-                       LINE=LINE, ACC=ACC, ACC_H=ACC_H, FONT=FONT)
+                       LINE=LINE, SOFT=SOFT, HEAD=HEAD, ACC=ACC,
+                       ACC_H=ACC_H, ACC_SOFT=ACC_SOFT, OK=OK,
+                       WARN=WARN, DANGER=DANGER, FONT=FONT)
 
         # 全局
         self.style.configure(".", font=(FONT, 10), background=BG, foreground=INK)
         self.style.configure("TFrame", background=BG)
         self.style.configure("Card.TFrame", background=CARD)
+        self.style.configure("Toolbar.TFrame", background=HEAD)
+        self.style.configure("Sidebar.TFrame", background=BG)
         self.style.configure("TLabel", background=CARD, foreground=INK)
+        self.style.configure("Card.TLabel", background=CARD, foreground=INK)
+        self.style.configure("Toolbar.TLabel", background=HEAD, foreground=INK)
+        self.style.configure("Sidebar.TLabel", background=BG, foreground=MUT)
+        self.style.configure("Muted.TLabel", background=CARD, foreground=MUT,
+                             font=(FONT, 9))
+        self.style.configure("Metric.TLabel", background=CARD, foreground=ACC,
+                             font=(FONT, 19, "bold"))
 
-        # Header 横幅
-        self.style.configure("Header.TFrame", background=ACC)
-        self.style.configure("HeaderLogo.TLabel", background=ACC)
-        self.style.configure("HeaderTitle.TLabel", background=ACC,
-                             foreground="#ffffff", font=(FONT, 16, "bold"))
-        self.style.configure("HeaderMotto.TLabel", background=ACC,
-                             foreground="#dcd6ff", font=(FONT, 10))
+        # Header：轻量品牌栏
+        self.style.configure("Header.TFrame", background=CARD)
+        self.style.configure("HeaderLogo.TLabel", background=CARD)
+        self.style.configure("HeaderTitle.TLabel", background=CARD,
+                             foreground=INK, font=(FONT, 15, "bold"))
+        self.style.configure("HeaderMotto.TLabel", background=CARD,
+                             foreground=MUT, font=(FONT, 9))
+        self.style.configure("HeaderRight.TLabel", background=CARD,
+                             foreground=MUT, font=(FONT, 9))
 
-        # 按钮：扁平卡片风格
+        # 按钮：系统工具风格，强调边界与状态
         self.style.configure("TButton", background=CARD, foreground=INK,
                              borderwidth=1, relief="flat", bordercolor=LINE,
-                             padding=(16, 8), font=(FONT, 10))
+                             focusthickness=1, focuscolor=ACC,
+                             padding=(14, 7), font=(FONT, 10))
         self.style.map("TButton",
-                       background=[("active", "#eef0f5"), ("pressed", "#e2e6ee")],
-                       bordercolor=[("active", "#cfd6e4")],
-                       foreground=[("disabled", "#b7bfcc")])
-        # 主操作按钮（紫色）
+                       background=[("active", HEAD), ("pressed", SOFT)],
+                       bordercolor=[("active", "#b7c7dd"), ("focus", ACC)],
+                       foreground=[("disabled", "#98a2b3")])
+        # 主操作按钮
         self.style.configure("Accent.TButton", background=ACC, foreground="#ffffff",
-                             borderwidth=0, padding=(18, 9), font=(FONT, 10, "bold"))
+                             borderwidth=0, padding=(16, 8),
+                             font=(FONT, 10, "bold"))
         self.style.map("Accent.TButton",
                        background=[("active", ACC_H), ("pressed", ACC_H)],
-                       foreground=[("disabled", "#b9b2f0")])
+                       foreground=[("disabled", "#bfdbfe")])
         # 危险按钮
-        self.style.configure("Danger.TButton", background="#e05a4e",
+        self.style.configure("Danger.TButton", background=DANGER,
                              foreground="#ffffff", borderwidth=0,
-                             padding=(14, 8), font=(FONT, 10))
+                             padding=(14, 7), font=(FONT, 10))
         self.style.map("Danger.TButton",
-                       background=[("active", "#c8483d"), ("pressed", "#c8483d")])
+                       background=[("active", "#b91c1c"),
+                                   ("pressed", "#b91c1c")])
 
-        # 侧边导航（tk.Button 手绘扁平样式，选中态品牌紫）
+        # 侧边导航（tk.Button 手绘扁平样式，选中态专业蓝）
         self._nav_style = dict(
-            bg=BG, fg=INK, activebackground="#e9e7fb", activeforeground=ACC,
-            font=(FONT, 10), anchor="w", bd=0, relief="flat",
-            padx=14, pady=10, highlightthickness=0, cursor="hand2")
+            bg=BG, fg="#344054", activebackground=ACC_SOFT,
+            activeforeground=ACC, font=(FONT, 10), anchor="w",
+            bd=0, relief="flat", padx=14, pady=10,
+            highlightthickness=0, cursor="hand2")
         self._nav_style_sel = dict(
-            bg=ACC, fg="#ffffff", activebackground=ACC_H, activeforeground="#ffffff",
-            font=(FONT, 10, "bold"), anchor="w", bd=0, relief="flat",
-            padx=14, pady=10, highlightthickness=0, cursor="hand2")
+            bg=ACC_SOFT, fg=ACC, activebackground=ACC_SOFT,
+            activeforeground=ACC, font=(FONT, 10, "bold"), anchor="w",
+            bd=0, relief="flat", padx=14, pady=10,
+            highlightthickness=0, cursor="hand2")
 
         # Notebook（兼容保留，现弃用）
         self.style.configure("TNotebook", background=BG, borderwidth=0)
         self.style.configure("TNotebook.Tab",
-                             background="#e9ebf2", foreground=MUT,
+                             background=SOFT, foreground=MUT,
                              borderwidth=0, padding=(24, 9), font=(FONT, 10))
         self.style.map("TNotebook.Tab",
                        background=[("selected", CARD)],
@@ -163,35 +198,53 @@ class StarGustApp:
 
         # Treeview 表格
         self.style.configure("Treeview", background=CARD, fieldbackground=CARD,
-                             foreground=INK, rowheight=30, borderwidth=0)
-        self.style.configure("Treeview.Heading", background="#f0f2f7",
-                             foreground="#5b6472", font=(FONT, 10, "bold"),
-                             relief="flat", padding=(8, 7))
+                             foreground=INK, rowheight=28, borderwidth=1,
+                             bordercolor=LINE)
+        self.style.configure("Treeview.Heading", background=HEAD,
+                             foreground="#344054", font=(FONT, 9, "bold"),
+                             relief="flat", padding=(8, 7),
+                             bordercolor=LINE)
         self.style.map("Treeview",
-                       background=[("selected", "#e9e7fb")],
+                       background=[("selected", ACC_SOFT)],
                        foreground=[("selected", INK)])
         self.style.map("Treeview.Heading",
-                       background=[("active", "#e6e9f1")])
+                       background=[("active", SOFT)])
 
         # 进度条
         self.style.configure("Horizontal.TProgressbar", background=ACC,
-                             troughcolor="#e5e8ee", borderwidth=0,
-                             lightcolor=ACC, darkcolor=ACC)
+                             troughcolor="#e6edf7", borderwidth=0,
+                             lightcolor=ACC, darkcolor=ACC, thickness=4)
 
         # 状态栏
-        self.style.configure("Status.TLabel", background="#eef0f5",
-                             foreground=INK, padding=(12, 6), font=(FONT, 9))
+        self.style.configure("Status.TLabel", background=CARD,
+                             foreground=INK, padding=(14, 7), font=(FONT, 9))
 
-        # 日志卡片
+        # 分组 / 输入 / 日志
         self.style.configure("TLabelframe", background=CARD, bordercolor=LINE,
                              relief="flat")
         self.style.configure("TLabelframe.Label", background=CARD,
-                             foreground=MUT, font=(FONT, 9))
+                             foreground="#344054", font=(FONT, 9, "bold"))
+        self.style.configure("TEntry", fieldbackground="#ffffff",
+                             foreground=INK, bordercolor=LINE,
+                             lightcolor=LINE, darkcolor=LINE,
+                             padding=(6, 4))
+        self.style.map("TEntry", bordercolor=[("focus", ACC)])
+        self.style.configure("TCombobox", fieldbackground="#ffffff",
+                             foreground=INK, bordercolor=LINE,
+                             arrowcolor=MUT, padding=(6, 4))
+        self.style.map("TCombobox", bordercolor=[("focus", ACC)])
 
         # 复选框
         self.style.configure("TCheckbutton", background=CARD, foreground=INK,
                              font=(FONT, 9))
-        self.style.map("TCheckbutton", background=[("active", CARD)])
+        self.style.map("TCheckbutton",
+                       background=[("active", CARD)],
+                       foreground=[("disabled", "#98a2b3")])
+        self.style.configure("Toolbar.TCheckbutton", background=HEAD,
+                             foreground=INK, font=(FONT, 9))
+        self.style.map("Toolbar.TCheckbutton",
+                       background=[("active", HEAD)],
+                       foreground=[("disabled", "#98a2b3")])
 
     def _load_logo(self):
         """加载品牌 logo（打包后从 _MEIPASS 定位资源）
@@ -209,33 +262,43 @@ class StarGustApp:
 
     # ---------------------------------------------------------------- 布局
     def _build_ui(self):
-        # 顶部品牌横幅：logo + 标题 + 口号
-        header = ttk.Frame(self.root, style="Header.TFrame", padding=(18, 12))
+        # 顶部品牌栏：轻量系统软件 chrome
+        header = ttk.Frame(self.root, style="Header.TFrame", padding=(18, 8))
         header.pack(fill=tk.X)
         self._header_logo = self._load_logo()
         if self._header_logo is not None:
             ttk.Label(header, image=self._header_logo,
-                      style="HeaderLogo.TLabel").pack(side=tk.LEFT, padx=(0, 14))
+                      style="HeaderLogo.TLabel").pack(side=tk.LEFT, padx=(0, 12))
         title_box = ttk.Frame(header, style="Header.TFrame")
         title_box.pack(side=tk.LEFT)
         ttk.Label(title_box, text="{} {}".format(C.APP_NAME, C.APP_NAME_CN),
                   style="HeaderTitle.TLabel").pack(anchor=tk.W)
         ttk.Label(title_box, text=C.MOTTO,
-                  style="HeaderMotto.TLabel").pack(anchor=tk.W, pady=(2, 0))
+                  style="HeaderMotto.TLabel").pack(anchor=tk.W, pady=(1, 0))
+        ttk.Label(header, text="网络问题不再复杂 · 让连接回归纯净",
+                  style="HeaderRight.TLabel").pack(side=tk.RIGHT, padx=(16, 0))
+        ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(fill=tk.X)
 
         # 主体：左侧导航 + 右侧内容区
-        self.body = ttk.Frame(self.root, style="TFrame", padding=12)
+        self.body = ttk.Frame(self.root, style="TFrame", padding=(12, 10, 12, 8))
         self.body.pack(fill=tk.BOTH, expand=True)
 
         # 左侧导航栏
-        self.sidebar = ttk.Frame(self.body, style="TFrame", width=168)
-        self.sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12))
+        self.sidebar = ttk.Frame(self.body, style="Sidebar.TFrame", width=186)
+        self.sidebar.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 14))
         self.sidebar.pack_propagate(False)
         self._nav_buttons = {}
-        for key, text in self.NAV_ITEMS:
-            btn = tk.Button(self.sidebar, text=text, command=lambda k=key: self.show_page(k))
-            btn.pack(fill=tk.X, pady=1)
+        for idx, (key, text) in enumerate(self.NAV_ITEMS, 1):
+            label = "{:02d}  {}  {}".format(idx, self.NAV_ICONS[key], text)
+            btn = tk.Button(self.sidebar, text=label,
+                            command=lambda k=key: self.show_page(k))
+            btn.pack(fill=tk.X, pady=(0, 2))
             self._nav_buttons[key] = btn
+        sidebar_spacer = ttk.Frame(self.sidebar, style="Sidebar.TFrame")
+        sidebar_spacer.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(self.sidebar, text="v1.0.0\nStarGust  星息",
+                  style="Sidebar.TLabel", justify=tk.LEFT
+                  ).pack(anchor=tk.W, padx=16, pady=(8, 2))
 
         # 右侧内容容器（白色卡片）
         self.content = ttk.Frame(self.body, style="Card.TFrame", padding=12)
@@ -243,7 +306,6 @@ class StarGustApp:
 
         # 全局进度条（内容区顶部，跨页面可见）
         self.progress = ttk.Progressbar(self.content, mode="determinate", maximum=100)
-        self.progress.pack(fill=tk.X, pady=(0, 10))
 
         # 页面叠放容器
         self.pages_box = ttk.Frame(self.content, style="Card.TFrame")
@@ -376,7 +438,7 @@ class StarGustApp:
         self.btn_ptest_many.pack(side=tk.LEFT, padx=4)
         self.pt_summary = ttk.Label(self.pt_frame, text="",
                                     style="Card.TFrame",
-                                    foreground="#8a94a6")
+                                    foreground=self._P["MUT"])
         self.pt_summary.pack(anchor=tk.W, pady=(4, 0))
 
         ptcols = ("p_host", "p_port", "p_status", "p_latency")
@@ -390,8 +452,8 @@ class StarGustApp:
         ):
             self.ptree_test.heading(cid, text=text)
             self.ptree_test.column(cid, width=width, anchor=tk.W)
-        self.ptree_test.tag_configure("ok", foreground="#1b5e20")
-        self.ptree_test.tag_configure("fail", foreground="#b71c1c")
+        self.ptree_test.tag_configure("ok", foreground=self._P["OK"])
+        self.ptree_test.tag_configure("fail", foreground=self._P["DANGER"])
         self.ptree_test.pack(fill=tk.X, pady=(6, 0))
 
     # ------------------------------------------------- 页面3：网络连通
@@ -404,7 +466,7 @@ class StarGustApp:
                                   style="Accent.TButton", command=self.on_net_check)
         self.btn_net.pack(side=tk.LEFT)
         self.net_summary = ttk.Label(net_bar, text="未检测", style="Card.TFrame",
-                                     foreground="#8a94a6")
+                                     foreground=self._P["MUT"])
         self.net_summary.pack(side=tk.LEFT, padx=(14, 0))
 
         ncols = ("zone", "target", "ip", "port", "latency", "status")
@@ -419,8 +481,8 @@ class StarGustApp:
         ):
             self.ntree.heading(cid, text=text)
             self.ntree.column(cid, width=width, anchor=tk.W, stretch=stretch)
-        self.ntree.tag_configure("ok", foreground="#1b5e20")
-        self.ntree.tag_configure("fail", foreground="#b71c1c")
+        self.ntree.tag_configure("ok", foreground=self._P["OK"])
+        self.ntree.tag_configure("fail", foreground=self._P["DANGER"])
         self.ntree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
         self._add_hscroll(page, self.ntree)
 
@@ -483,7 +545,7 @@ class StarGustApp:
                                        command=self.on_adapters)
         self.btn_adapters.pack(side=tk.LEFT, padx=4)
         self.diag_summary = ttk.Label(info_box, text="", style="Card.TFrame",
-                                      foreground="#8a94a6")
+                                      foreground=self._P["MUT"])
         self.diag_summary.pack(side=tk.LEFT, padx=(10, 0))
 
         dcols = ("diag_item", "diag_value", "diag_note")
@@ -495,8 +557,8 @@ class StarGustApp:
         ):
             self.diag_tree.heading(cid, text=text)
             self.diag_tree.column(cid, width=width, anchor=tk.W, stretch=stretch)
-        self.diag_tree.tag_configure("ok", foreground="#1b5e20")
-        self.diag_tree.tag_configure("fail", foreground="#b71c1c")
+        self.diag_tree.tag_configure("ok", foreground=self._P["OK"])
+        self.diag_tree.tag_configure("fail", foreground=self._P["DANGER"])
         self.diag_tree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
         self._add_hscroll(page, self.diag_tree)
 
@@ -504,11 +566,26 @@ class StarGustApp:
     def _build_page_overview(self):
         page = self._new_page("overview")
 
+        heading = ttk.Frame(page, style="Card.TFrame")
+        heading.pack(fill=tk.X, pady=(0, 8))
+        title_box = ttk.Frame(heading, style="Card.TFrame")
+        title_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Label(title_box, text="本机概览", style="Card.TLabel",
+                  foreground=self._P["INK"],
+                  font=(self._P["FONT"], 16, "bold")).pack(anchor=tk.W)
+        ttk.Label(title_box, text="快速了解本机资源、进程、网络连接及网络状态",
+                  style="Muted.TLabel").pack(anchor=tk.W, pady=(2, 0))
+        ttk.Label(heading, text="网络正常", style="Card.TLabel",
+                  foreground=self._P["OK"],
+                  font=(self._P["FONT"], 9, "bold")
+                  ).pack(side=tk.RIGHT, padx=(12, 0))
+
         # 控制栏：自动刷新 + 立即刷新 + 带宽 / TCP 概览
-        bar = ttk.Frame(page, style="Card.TFrame")
-        bar.pack(fill=tk.X, pady=(0, 10))
+        bar = ttk.Frame(page, style="Toolbar.TFrame", padding=(10, 6))
+        bar.pack(fill=tk.X, pady=(0, 8))
         self.mon_auto_var = tk.BooleanVar(value=True)
         self.chk_mon_auto = ttk.Checkbutton(bar, text="自动刷新",
+                                            style="Toolbar.TCheckbutton",
                                             variable=self.mon_auto_var,
                                             command=self.on_monitor_auto)
         self.chk_mon_auto.pack(side=tk.LEFT)
@@ -517,44 +594,44 @@ class StarGustApp:
                                           command=self.on_monitor_refresh)
         self.btn_mon_refresh.pack(side=tk.LEFT, padx=8)
         self.mon_bw = ttk.Label(bar, text="↓ --  ↑ --",
-                                style="Card.TFrame",
-                                foreground="#6C5CE7",
+                                style="Toolbar.TLabel",
+                                foreground=self._P["ACC"],
                                 font=("Microsoft YaHei UI", 13, "bold"))
         self.mon_bw.pack(side=tk.LEFT, padx=(12, 0))
         self.mon_stat = ttk.Label(bar, text="TCP 连接: --",
-                                  style="Card.TFrame",
-                                  foreground="#455a64")
+                                  style="Toolbar.TLabel",
+                                  foreground=self._P["MUT"])
         self.mon_stat.pack(side=tk.LEFT, padx=(12, 0))
 
         # 资源概览卡片：CPU / 内存 / 磁盘
         res = ttk.Frame(page, style="Card.TFrame")
-        res.pack(fill=tk.X, pady=(0, 10))
+        res.pack(fill=tk.X, pady=(0, 8))
         self._res_labels = {}
         for i, (key, title) in enumerate((
                 ("cpu", "CPU 使用率"),
                 ("mem", "内存占用"),
                 ("disk", "磁盘占用"))):
-            card = ttk.LabelFrame(res, text=title, padding=8)
+            card = ttk.LabelFrame(res, text=title, padding=7)
             card.pack(side=tk.LEFT, fill=tk.X, expand=True,
-                      padx=(0 if i == 0 else 8, 0))
-            value = ttk.Label(card, text="--", style="Card.TFrame",
-                              foreground="#6C5CE7",
-                              font=("Microsoft YaHei UI", 18, "bold"))
+                      padx=(0 if i == 0 else 10, 0))
+            value = ttk.Label(card, text="--", style="Metric.TLabel")
             value.pack(anchor=tk.W)
             bar_prog = ttk.Progressbar(card, mode="determinate", maximum=100)
-            bar_prog.pack(fill=tk.X, pady=(6, 2))
-            detail = ttk.Label(card, text="", style="Card.TFrame",
-                               foreground="#8a94a6", font=("Microsoft YaHei UI", 9))
+            bar_prog.pack(fill=tk.X, pady=(4, 1))
+            detail = ttk.Label(card, text="", style="Muted.TLabel")
             detail.pack(anchor=tk.W)
             self._res_labels[key] = (value, bar_prog, detail)
 
+        tables = ttk.Frame(page, style="Card.TFrame")
+        tables.pack(fill=tk.BOTH, expand=True)
+
         # 进程资源占用 Top 榜
-        proc_frame = ttk.LabelFrame(page, text="进程资源占用 Top 榜（点击行选中，可结束）",
+        proc_frame = ttk.LabelFrame(tables, text="进程资源占用 Top 榜（点击行选中，可结束）",
                                     padding=6)
-        proc_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        proc_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
         pcols = ("p_name", "p_pid", "p_cpu", "p_mem")
         self.ptree_proc = ttk.Treeview(proc_frame, columns=pcols, show="headings",
-                                       height=6)
+                                       height=8)
         for cid, text, width, stretch in (
             ("p_name", "进程", 220, True),
             ("p_pid", "PID", 80, False),
@@ -565,23 +642,23 @@ class StarGustApp:
             self.ptree_proc.column(cid, width=width, anchor=tk.W, stretch=stretch)
         self.ptree_proc.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
         self._add_hscroll(proc_frame, self.ptree_proc)
-        proc_bar = ttk.Frame(proc_frame, style="Card.TFrame")
+        proc_bar = ttk.Frame(proc_frame, style="Toolbar.TFrame", padding=(8, 4))
         proc_bar.pack(fill=tk.X, side=tk.BOTTOM, pady=(6, 0))
         self.btn_kill = ttk.Button(proc_bar, text="结束选中进程",
                                    style="Danger.TButton",
                                    command=self.on_kill_process)
         self.btn_kill.pack(side=tk.LEFT)
         self.proc_tip = ttk.Label(proc_bar, text="CPU 占用基于两次采样差分，需连续刷新后显示",
-                                  style="Card.TFrame", foreground="#8a94a6",
+                                  style="Toolbar.TLabel", foreground=self._P["MUT"],
                                   font=("Microsoft YaHei UI", 9))
         self.proc_tip.pack(side=tk.LEFT, padx=(10, 0))
 
         # 网络连接实时表
-        net_frame = ttk.LabelFrame(page, text="网络连接（实时）", padding=6)
-        net_frame.pack(fill=tk.BOTH, expand=True)
+        net_frame = ttk.LabelFrame(tables, text="网络连接（实时）", padding=6)
+        net_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
         mcols = ("m_proc", "m_pid", "m_local", "m_remote", "m_state")
         self.mtree = ttk.Treeview(net_frame, columns=mcols, show="headings",
-                                  height=5)
+                                  height=8)
         for cid, text, width, stretch in (
             ("m_proc", "进程", 150, False),
             ("m_pid", "PID", 70, False),
@@ -591,8 +668,8 @@ class StarGustApp:
         ):
             self.mtree.heading(cid, text=text)
             self.mtree.column(cid, width=width, anchor=tk.W, stretch=stretch)
-        self.mtree.tag_configure("established", foreground="#1b5e20")
-        self.mtree.tag_configure("listening", foreground="#1565c0")
+        self.mtree.tag_configure("established", foreground=self._P["OK"])
+        self.mtree.tag_configure("listening", foreground=self._P["ACC"])
         self.mtree.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
         self._add_hscroll(net_frame, self.mtree)
         self._mon_job = None
@@ -604,7 +681,7 @@ class StarGustApp:
         page = self._new_page("proxy")
 
         tip = ttk.Label(page, text="设置 / 取消系统代理，并测试代理连通性。",
-                        style="Card.TFrame", foreground="#8a94a6")
+                        style="Card.TFrame", foreground=self._P["MUT"])
         tip.pack(anchor=tk.W, pady=(0, 12))
 
         proxy_card = ttk.LabelFrame(page, text="系统代理", padding=10)
@@ -630,12 +707,12 @@ class StarGustApp:
                                          command=self.on_test_proxy)
         self.btn_test_proxy.pack(side=tk.LEFT, padx=4)
         self.proxy_status = ttk.Label(proxy_card, text="", style="Card.TFrame",
-                                      foreground="#8a94a6")
+                                      foreground=self._P["MUT"])
         self.proxy_status.pack(anchor=tk.W, pady=(8, 0))
 
         hint = ttk.Label(page, text="提示：代理增强仅操作系统代理与代理相关环境变量，\n"
                          "不会修改 PATH 等其它系统变量。",
-                         style="Card.TFrame", foreground="#8a94a6")
+                         style="Card.TFrame", foreground=self._P["MUT"])
         hint.pack(anchor=tk.W, pady=(16, 0))
 
     # ------------------------------------------------- 页面7：反馈
@@ -644,7 +721,7 @@ class StarGustApp:
 
         tip = ttk.Label(page, text="遇到问题或有建议？填写下方内容，一键生成反馈文件，\n"
                          "附带系统信息快照，方便您发送给开发者。",
-                        style="Card.TFrame", foreground="#8a94a6")
+                        style="Card.TFrame", foreground=self._P["MUT"])
         tip.pack(anchor=tk.W, pady=(0, 12))
 
         fb_box = ttk.LabelFrame(page, text="反馈内容", padding=10)
@@ -655,7 +732,7 @@ class StarGustApp:
         self.fb_text.pack(fill=tk.BOTH, expand=True, side=tk.TOP)
         self.fb_text.insert(tk.END, "请描述你遇到的问题或建议……")
         self.fb_text.tag_add("ph", "1.0", "end")
-        self.fb_text.tag_configure("ph", foreground="#b7bfcc")
+        self.fb_text.tag_configure("ph", foreground="#98a2b3")
         self.fb_text.bind("<FocusIn>", self._fb_focus_in)
         self.fb_text.bind("<FocusOut>", self._fb_focus_out)
         self._fb_placeholder = True
@@ -669,7 +746,7 @@ class StarGustApp:
         self.btn_fb_clear = ttk.Button(fb_bar, text="清空", command=self.on_feedback_clear)
         self.btn_fb_clear.pack(side=tk.LEFT, padx=8)
         self.fb_status = ttk.Label(fb_bar, text="", style="Card.TFrame",
-                                   foreground="#8a94a6")
+                                   foreground=self._P["MUT"])
         self.fb_status.pack(side=tk.LEFT, padx=(10, 0))
 
     def _fb_focus_in(self, _e=None):
@@ -749,7 +826,7 @@ class StarGustApp:
         page = self._new_page("settings")
 
         tip = ttk.Label(page, text="通用设置。修改后立即生效。",
-                        style="Card.TFrame", foreground="#8a94a6")
+                        style="Card.TFrame", foreground=self._P["MUT"])
         tip.pack(anchor=tk.W, pady=(0, 12))
 
         gen = ttk.LabelFrame(page, text="常规", padding=10)
@@ -774,10 +851,10 @@ class StarGustApp:
                   style="Card.TFrame", font=("Microsoft YaHei UI", 11, "bold")
                   ).pack(anchor=tk.W)
         ttk.Label(about, text="{}".format(C.MOTTO),
-                  style="Card.TFrame", foreground="#8a94a6"
+                  style="Card.TFrame", foreground=self._P["MUT"]
                   ).pack(anchor=tk.W, pady=(2, 0))
         ttk.Label(about, text="窗口快捷切换：Ctrl+1 ~ Ctrl+8 对应左侧导航 8 个模块。",
-                  style="Card.TFrame", foreground="#8a94a6"
+                  style="Card.TFrame", foreground=self._P["MUT"]
                   ).pack(anchor=tk.W, pady=(2, 0))
 
     def on_setting_overview(self):
@@ -794,25 +871,27 @@ class StarGustApp:
 
     # ------------------------------------------------- 日志区（可折叠）
     def _build_log(self):
-        log_card = ttk.Frame(self.root, style="TFrame", padding=(12, 0, 12, 12))
+        log_card = ttk.Frame(self.root, style="TFrame", padding=(12, 0, 12, 8))
         log_card.pack(fill=tk.X)
         head = ttk.Frame(log_card, style="TFrame")
         head.pack(fill=tk.X, pady=(2, 4))
         ttk.Label(head, text="日志", style="TFrame",
-                  foreground="#5b6472", font=("Microsoft YaHei UI", 9, "bold")
+                  foreground="#344054", font=("Microsoft YaHei UI", 9, "bold")
                   ).pack(side=tk.LEFT)
         self.btn_log_toggle = tk.Button(
             head, text="收起 ▾", command=self._toggle_log,
-            bd=0, relief="flat", bg="#f5f6fa", fg="#8a94a6",
-            activebackground="#e9e7fb", activeforeground="#6C5CE7",
+            bd=0, relief="flat", bg=self._P["BG"], fg=self._P["MUT"],
+            activebackground=self._P["ACC_SOFT"],
+            activeforeground=self._P["ACC"],
             font=("Microsoft YaHei UI", 9), padx=6, cursor="hand2",
             highlightthickness=0)
         self.btn_log_toggle.pack(side=tk.RIGHT)
 
         self.log_frame = ttk.Frame(log_card, style="Card.TFrame", padding=6)
         self.log_frame.pack(fill=tk.X)
-        self.log_text = tk.Text(self.log_frame, height=7, state=tk.DISABLED,
-                                font=("Consolas", 9), bg="#ffffff", fg=self.C_INK,
+        self.log_text = tk.Text(self.log_frame, height=5, state=tk.DISABLED,
+                                font=("Consolas", 9), bg="#111827",
+                                fg="#d1d5db", insertbackground="#d1d5db",
                                 relief="flat", bd=0, padx=4, pady=4)
         self.log_text.pack(fill=tk.X)
 
@@ -883,11 +962,14 @@ class StarGustApp:
 
     def _set_status(self, msg, kind="info"):
         """状态栏着色提示：info=灰蓝 / ok=绿 / error=红 / busy=蓝"""
-        colors = {"info": "#455a64", "ok": "#1b5e20",
-                  "error": "#b71c1c", "busy": "#1565c0"}
-        self.status.configure(text=msg, foreground=colors.get(kind, "#455a64"))
+        colors = {"info": self._P["MUT"], "ok": self._P["OK"],
+                  "error": self._P["DANGER"], "busy": self._P["ACC"]}
+        self.status.configure(text=msg,
+                              foreground=colors.get(kind, self._P["MUT"]))
 
     def _start_progress(self):
+        if not self.progress.winfo_manager():
+            self.progress.pack(fill=tk.X, before=self.pages_box, pady=(0, 8))
         self.progress.configure(value=0)
 
         def tick():
@@ -905,7 +987,10 @@ class StarGustApp:
                 pass
             self._progress_job = None
         self.progress.configure(value=100)
-        self.root.after(500, lambda: self.progress.configure(value=0))
+        def clear_progress():
+            self.progress.configure(value=0)
+            self.progress.pack_forget()
+        self.root.after(500, clear_progress)
 
     def set_busy(self, flag):
         self._busy = flag
@@ -1112,7 +1197,7 @@ class StarGustApp:
     def on_net_check(self):
         self.log("开始检测内外网连通性（多线程并发 TCP 探测）……")
         self._set_status("正在检测网络连通性……", "busy")
-        self.net_summary.configure(text="检测中……", foreground="#1565c0")
+        self.net_summary.configure(text="检测中……", foreground=self._P["ACC"])
         self._run_async(netcheck.run_all, self._render_net)
 
     def _render_net(self, rows):
@@ -1141,7 +1226,8 @@ class StarGustApp:
                 r["zone"], "{} :{}".format(r["note"], r["port"]),
                 r["ip"] or "-", r["port"], lat, status))
         summary = "内网 {}/{} · 外网 {}/{} 可达".format(lan_ok, lan_n, wan_ok, wan_n)
-        color = "#1b5e20" if (lan_ok == lan_n and wan_ok == wan_n) else "#b71c1c"
+        color = self._P["OK"] if (lan_ok == lan_n and wan_ok == wan_n) \
+            else self._P["DANGER"]
         self.net_summary.configure(text=summary, foreground=color)
         self.log("  网络检测：{}".format(summary))
         for r in rows:
@@ -1516,7 +1602,7 @@ class StarGustApp:
         self.pt_summary.configure(
             text="{}:{} {}".format(r["host"], r["port"],
                                    "可连通" if r["ok"] else "不可连通"),
-            foreground="#1b5e20" if r["ok"] else "#b71c1c")
+            foreground=self._P["OK"] if r["ok"] else self._P["DANGER"])
         self.log("  端口 {}:{} -> {}".format(
             r["host"], r["port"], "开放" if r["ok"] else "关闭/拒绝"))
         self._set_status("端口测试完成：{}:{} {}".format(
@@ -1541,7 +1627,7 @@ class StarGustApp:
                 "{}:{}".format(r["host"], r["port"]), r["port"], status, lat))
         self.pt_summary.configure(
             text="{} 个常用端口，开放 {} 个".format(len(rows), open_n),
-            foreground="#1b5e20" if open_n else "#b71c1c")
+            foreground=self._P["OK"] if open_n else self._P["DANGER"])
         self.log("  常用端口测试：{} 个开放 / 共 {}".format(open_n, len(rows)))
         self._set_status("常用端口测试完成：开放 {} / 共 {}".format(
             open_n, len(rows)), "ok" if open_n else "error")
@@ -1772,7 +1858,7 @@ class StarGustApp:
     def _after_proxy_op(self, res):
         ok, msg = res
         self.proxy_status.configure(
-            text=msg, foreground=("#1b5e20" if ok else "#b71c1c"))
+            text=msg, foreground=(self._P["OK"] if ok else self._P["DANGER"]))
         self.log("  " + msg)
         self._set_status(msg, "ok" if ok else "error")
         # 代理变更后刷新残留检测视图
@@ -1784,11 +1870,11 @@ class StarGustApp:
         port = self.proxy_port_var.get().strip()
         if ok:
             msg = "{}:{} 代理可连通，延迟 {} ms".format(host, port, lat)
-            self.proxy_status.configure(text=msg, foreground="#1b5e20")
+            self.proxy_status.configure(text=msg, foreground=self._P["OK"])
             self._set_status(msg, "ok")
         else:
             msg = "{}:{} 代理不可连通：{}".format(host, port, err or "无响应")
-            self.proxy_status.configure(text=msg, foreground="#b71c1c")
+            self.proxy_status.configure(text=msg, foreground=self._P["DANGER"])
             self._set_status(msg, "error")
         self.log("  " + msg)
 
